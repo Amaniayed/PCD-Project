@@ -1,1 +1,5 @@
-print("Projet Python bien structuré 🚀")
+def main():
+    print("PCD Project started successfully 🚀")
+
+if __name__ == "__main__":
+    main()

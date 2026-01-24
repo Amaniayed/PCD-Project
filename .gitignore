@@ -1,0 +1,18 @@
+# --- Python ---
+__pycache__/
+*.pyc
+.venv/
+env/
+venv/
+
+# --- Données et Modèles (Souvent trop volumineux pour Git) ---
+
+data/processed/
+models/
+
+# --- VS Code ---
+.vscode/
+
+# --- Système ---
+.DS_Store
+Thumbs.db
