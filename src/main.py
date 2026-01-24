@@ -1,0 +1,1 @@
+print("Projet Python bien structuré 🚀")
