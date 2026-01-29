@@ -1,9 +1,9 @@
 import random
 import os
+import csv
 
 class MasterDayManager:
     def __init__(self):
-        # Puissances en Watts basées sur vos équipements
         self.LOADS = {
             "fridge": 100, "medical": 80, "night_lights": 30,
             "kettle": 2000, "microwave": 1000, "radio": 20,
@@ -13,34 +13,25 @@ class MasterDayManager:
         }
 
     def generate_day(self, scenario_id):
-        data = {}
+        data = []
         for minute in range(1, 1441):
             h = (minute - 1) // 60
             m = (minute - 1) % 60
-            
-            # --- CHARGE DE BASE (Sommeil : 22h - 6h) ---
             is_sleep = (h >= 22 or h < 6)
             
             if is_sleep:
-                # Le scénario 9 (Dehors) n'a pas de veilleuse la nuit
                 nl = 0 if scenario_id == 9 else self.LOADS["night_lights"]
                 current_load = self.LOADS["fridge"] + self.LOADS["medical"] + nl
             else:
-                # Heures actives : Frigo + Médical + Bruit aléatoire pour le réalisme
                 noise = random.uniform(0.98, 1.02)
                 current_load = (self.LOADS["fridge"] + self.LOADS["medical"]) * noise
                 
-                # --- LOGIQUE DES SCÉNARIOS COHÉRENTS (SENIORS) ---
-                
-                if scenario_id == 9: # Outside Day
-                    pass # Uniquement les charges de base
+                if scenario_id == 9: 
+                    pass
                 else:
-                    # Chauffage (Plus intense pour le scénario 10)
                     heat_mult = 2.0 if scenario_id == 10 else 1.0
                     if 7 <= h < 21: 
                         current_load += self.LOADS["heating"] * heat_mult
-                    
-                    # Éléments de routine (Lumières, Radio, Bouilloire)
                     if 6 <= h < 9: 
                         current_load += self.LOADS["lights"] + self.LOADS["radio"]
                         if (h == 6 and 30 <= m < 35) or (h == 8 and 0 <= m < 5): 
@@ -54,8 +45,7 @@ class MasterDayManager:
                     if 13 <= h < 22:
                         current_load += self.LOADS["tv"]
                         if h >= 17: current_load += self.LOADS["lights"]
-                    
-                    # Scénarios spécifiques
+                
                     if scenario_id in [2, 4, 6] and h == 10:
                         current_load += self.LOADS["washing_machine"]
                     
@@ -71,7 +61,6 @@ class MasterDayManager:
                     if scenario_id == 8 and 9 <= h < 12:
                         current_load += self.LOADS["vacuum"] + self.LOADS["steam_cleaner"]
 
-                    # --- NOUVEAUX SCÉNARIOS (11 à 20) ---
                     if scenario_id == 11: # Radio Fan
                         if 8 <= h < 20: current_load += self.LOADS["radio"]
 
@@ -105,23 +94,24 @@ class MasterDayManager:
                     if scenario_id == 20: # Sick Day
                         if 7 <= h < 22: current_load += self.LOADS["heating"] + self.LOADS["radio"]
 
-            data[minute] = round(current_load, 2)
+            data.append({"Minute": minute, "Consumption (W)": round(current_load, 2)})
         return data
 
 def save_table(name, data):
-    # Création du chemin de sortie
     output_dir = os.path.join("data", "scenarios")
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
     
-    filename = f"table_{name.lower().replace(' ', '_')}.txt"
+    filename = f"table_{name.lower().replace(' ', '_')}.csv"
     filepath = os.path.join(output_dir, filename)
     
-    with open(filepath, "w") as f:
-        f.write(f"Minute | Consumption (W) - SCENARIO: {name}\n")
-        f.write("-" * 45 + "\n")
-        for m, v in data.items():
-            f.write(f"{m:<6} | {v:<15.2f}\n")
+    with open(filepath, "w", newline='') as f:
+        fieldnames = ["Minute", "Consumption (W)"]
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        
+        writer.writeheader()
+        writer.writerows(data)
+        
     return filepath
 
 if __name__ == "__main__":
@@ -150,7 +140,7 @@ if __name__ == "__main__":
     }
 
     
-
+    
     for scenario_id, scenario_name in scenarios.items():
         data = manager.generate_day(scenario_id)
         filepath = save_table(scenario_name, data)
