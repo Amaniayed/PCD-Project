@@ -70,23 +70,24 @@ def generate_month_dataset_minutes(start_date_str, num_days=365):
             scenario_ids, weights=scenario_weights, k=1
         )[0]
 
-        # Base day
+        # Generate base day
         day_minutes = manager.generate_day(scenario_id)
 
-        #  Seasonal variation
-        factor = seasonal_factor(day_date)
-        day_minutes = [v * factor for v in day_minutes]
-
-        #  Daily realism
+        #  Add realism
         day_minutes = add_realism_to_day(day_minutes)
 
-        row = [day_date.strftime("%Y-%m-%d"), scenario_id] + day_minutes
+        # ONE ROW = ONE DAY
+        row = (
+            [day_date.strftime("%Y-%m-%d"), scenario_id]
+            + day_minutes
+        )
+
         rows.append(row)
 
-        return rows
+    return rows
 
 def add_realism_to_day(day_minutes):
-    # 1️ Variation journalière globale
+    # 1️ Variation journalière globale (±5 %)
     daily_factor = random.uniform(0.95, 1.05)
     day_minutes = [v * daily_factor for v in day_minutes]
 
@@ -105,7 +106,7 @@ def add_realism_to_day(day_minutes):
         for i in range(start, min(start + duration, 1440)):
             day_minutes[i] *= reduction
 
-    # 4️ Décalage temporel
+    # 4️ Décalage temporel léger
     shift = random.randint(-5, 5)
     day_minutes = np.roll(day_minutes, shift).tolist()
 
@@ -121,7 +122,6 @@ def save_csv_minutes(rows, output_path):
         writer = csv.writer(f)
         writer.writerow(headers)
         writer.writerows(rows)
-
 
 
 if __name__ == "__main__":
