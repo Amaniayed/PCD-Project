@@ -3,9 +3,12 @@ import matplotlib.pyplot as plt
 import os
 def plot_week():
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
     PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, "..", ".."))
+
     csv_path = os.path.join(
-        PROJECT_ROOT, "data", "raw", "full_week_dataset.csv"
+        PROJECT_ROOT, "data", "raw", "full_year_dataset.csv"
     )
 
     if not os.path.exists(csv_path):
@@ -16,6 +19,8 @@ def plot_week():
     
     plt.figure(figsize=(20, 8))
     plt.plot(df['timestamp'], df['aggregate'], color='#2c3e50', linewidth=0.5, label='Aggregate Power (W)')
+    
+    # Shade background for different days
     days = df['timestamp'].dt.date.unique()
     colors = ['#f9f9f9', '#ffffff']
     for i, day in enumerate(days):
@@ -32,7 +37,7 @@ def plot_week():
     plt.tight_layout()
     os.makedirs("reports/figures", exist_ok=True)
 
-    output_path = os.path.join("reports", "figures", "final_weekly_profile.png")
+    output_path = os.path.join("reports", "figures", "final_monthly_profile.png")
     plt.savefig(output_path, dpi=300)
     plt.close()
 
