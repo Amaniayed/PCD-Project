@@ -11,7 +11,7 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 try:
-    from src.day_manager_simulator import MasterDayManager
+    from day_manager_simulator import MasterDayManager
 except ModuleNotFoundError:
     try:
         sys.path.append(os.path.abspath(os.path.join(current_dir, "..")))
@@ -69,21 +69,13 @@ def generate_month_dataset_minutes(start_date_str, num_days=365):
         scenario_id = random.choices(
             scenario_ids, weights=scenario_weights, k=1
         )[0]
-
-        # Generate base day
         day_minutes = manager.generate_day(scenario_id)
-
-        #  Add realism
         day_minutes = add_realism_to_day(day_minutes)
-
-        # ONE ROW = ONE DAY
         row = (
             [day_date.strftime("%Y-%m-%d"), scenario_id]
             + day_minutes
         )
-
         rows.append(row)
-
     return rows
 
 def add_realism_to_day(day_minutes):
