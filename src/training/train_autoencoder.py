@@ -7,7 +7,6 @@ import pandas as pd
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.model_selection import train_test_split
 
-# Fix import issue by adding the project root to sys.path
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if project_root not in sys.path:
     sys.path.append(project_root)
@@ -34,14 +33,20 @@ def train():
     consumption_cols = [f"m_{i}" for i in range(1, 1441)]
     data = df[consumption_cols].values
 
-    # Convert to torch tensor and ensure float32
+
     data_tensor = torch.tensor(data, dtype=torch.float32)
 
-    # Split data
-    train_data, val_data = train_test_split(data_tensor, test_size=0.2, random_state=42)
+    # Split data into Train (70%), Validation (15%), and Test (15%)
+    # First split: Train and Remaining
+    
+    train_data, temp_data = train_test_split(data_tensor, test_size=0.3, random_state=42)
+    val_data, test_data = train_test_split(temp_data, test_size=0.5, random_state=42)
 
     train_dataloader = DataLoader(TensorDataset(train_data), batch_size=16, shuffle=True)
     val_dataloader = DataLoader(TensorDataset(val_data), batch_size=16, shuffle=False)
+    test_dataloader = DataLoader(TensorDataset(test_data), batch_size=16, shuffle=False)
+
+    print(f"Dataset Split: Train={len(train_data)}, Val={len(val_data)}, Test={len(test_data)}")
 
     model = Autoencoder(input_dim=1440)
     criterion = nn.MSELoss()
@@ -58,10 +63,10 @@ def train():
         model.train()
         total_train_loss = 0
         for batch in train_dataloader:
-            inputs = batch[0] # Shape: (batch_size, 1440)
+            inputs = batch[0]
             
             optimizer.zero_grad()
-            outputs = model(inputs) # model handles unsqueeze internally
+            outputs = model(inputs)
             loss = criterion(outputs, inputs)
             loss.backward()
             optimizer.step()
@@ -94,6 +99,19 @@ def train():
                 print(f"\tEarly stopping triggered after {patience} epochs.")
                 break
 
+    print("\n--- Final Test Evaluation ---")
+    model.load_state_dict(torch.load(os.path.join(save_path, "autoencoder_best.pth")))
+    model.eval()
+    total_test_loss = 0
+    with torch.no_grad():
+        for batch in test_dataloader:
+            inputs = batch[0]
+            outputs = model(inputs)
+            loss = criterion(outputs, inputs)
+            total_test_loss += loss.item()
+    
+    avg_test_loss = total_test_loss / len(test_dataloader)
+    print(f"Test Loss: {avg_test_loss:.6f}")
     print("\nTraining completed.")
 
 if __name__ == "__main__":
