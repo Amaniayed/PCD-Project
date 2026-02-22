@@ -1,5 +1,5 @@
 Anomaly Type,MSE,Detected
-Huge Spike (5kW),4.116167,YES
-Small Spike (500W),0.045143,YES
-Zero Consumption,0.056386,YES
-Constant High (2kW),0.334906,YES
+Huge Spike (5kW),4.147865,YES
+Small Spike (500W),0.048102,YES
+Zero Consumption,0.064798,YES
+Constant High (2kW),0.324012,YES

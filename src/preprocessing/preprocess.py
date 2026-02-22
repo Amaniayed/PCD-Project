@@ -47,5 +47,5 @@ if __name__ == "__main__":
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     raw_data_path = os.path.join(project_root, "data", "raw", "full_year_dataset.csv")
     processed_data_path = os.path.join(project_root, "data", "processed", "processed_full_year_dataset.csv")
-
+    
     preprocess_data(raw_data_path, processed_data_path)

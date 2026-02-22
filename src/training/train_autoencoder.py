@@ -36,15 +36,21 @@ def train():
 
     data_tensor = torch.tensor(data, dtype=torch.float32)
 
-    # Split data into Train (70%), Validation (15%), and Test (15%)
-    # First split: Train and Remaining
-    
+    # Split data into Train (70%), Validation (20%), and Test (10%)
+    # First split: Train and Remaining (30%)
     train_data, temp_data = train_test_split(data_tensor, test_size=0.3, random_state=42)
-    val_data, test_data = train_test_split(temp_data, test_size=0.5, random_state=42)
+    # Second split: Validation (20/30 = 2/3) and Test (10/30 = 1/3)
+    val_data, test_data = train_test_split(temp_data, test_size=1/3, random_state=42)
+    val_df = pd.DataFrame(val_data.numpy(), columns=consumption_cols)
+    val_dir = os.path.join(project_root, "data", "validation")
+    os.makedirs(val_dir, exist_ok=True)
 
+    val_path = os.path.join(val_dir, "normal_validation_dataset.csv")
+    val_df.to_csv(val_path, index=False)
+    print("Validation dataset saved to:", val_path)
     train_dataloader = DataLoader(TensorDataset(train_data), batch_size=16, shuffle=True)
     val_dataloader = DataLoader(TensorDataset(val_data), batch_size=16, shuffle=False)
-    test_dataloader = DataLoader(TensorDataset(test_data), batch_size=16, shuffle=False)
+
 
     print(f"Dataset Split: Train={len(train_data)}, Val={len(val_data)}, Test={len(test_data)}")
 
@@ -99,19 +105,6 @@ def train():
                 print(f"\tEarly stopping triggered after {patience} epochs.")
                 break
 
-    print("\n--- Final Test Evaluation ---")
-    model.load_state_dict(torch.load(os.path.join(save_path, "autoencoder_best.pth")))
-    model.eval()
-    total_test_loss = 0
-    with torch.no_grad():
-        for batch in test_dataloader:
-            inputs = batch[0]
-            outputs = model(inputs)
-            loss = criterion(outputs, inputs)
-            total_test_loss += loss.item()
-    
-    avg_test_loss = total_test_loss / len(test_dataloader)
-    print(f"Test Loss: {avg_test_loss:.6f}")
     print("\nTraining completed.")
 
 if __name__ == "__main__":
