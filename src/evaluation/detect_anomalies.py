@@ -9,13 +9,13 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 try:
-    from src.models.autoencoder import Autoencoder
+    from src.training.autoencoder import Autoencoder
 except ImportError:
     try:
-        from models.autoencoder import Autoencoder
+        from src.training.autoencoder import Autoencoder
     except ImportError:
         sys.path.append(os.path.join(project_root, "src"))
-        from models.autoencoder import Autoencoder
+        from src.training.autoencoder import Autoencoder
 from sklearn.metrics import precision_score, recall_score, f1_score
 def compute_threshold(model, val_tensor, k):
     model.eval()
@@ -113,7 +113,7 @@ def main():
     summary_df.to_csv(summary_path, index=False)
 
     print("\nDetection summary saved to:", summary_path)
-    best_k = 2 
+    best_k = 2.5 
     best_threshold = compute_threshold(model, val_tensor, best_k)
     best_preds, best_mse = detect_on_test(model, test_tensor, best_threshold)
 
