@@ -11,7 +11,14 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-from src.training.autoencoder import Autoencoder
+try:
+    from src.models.autoencoder import Autoencoder
+except ImportError:
+    try:
+        from models.autoencoder import Autoencoder
+    except ImportError:
+        sys.path.append(os.path.join(project_root, "src"))
+        from models.autoencoder import Autoencoder
 
 # ─────────────────────────────────────────────
 # INJECTION FUNCTIONS

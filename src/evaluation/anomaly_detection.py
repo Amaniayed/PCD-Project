@@ -10,13 +10,13 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 try:
-    from src.training.autoencoder import Autoencoder
+    from src.models.autoencoder import Autoencoder
 except ImportError:
     try:
-        from src.training.autoencoder import Autoencoder
+        from models.autoencoder import Autoencoder
     except ImportError:
         sys.path.append(os.path.join(project_root, "src"))
-        from src.training.autoencoder import Autoencoder
+        from models.autoencoder import Autoencoder
 
 def detect_anomalies():
     processed_path = os.path.join(project_root, "data", "processed", "processed_full_year_dataset.csv")
