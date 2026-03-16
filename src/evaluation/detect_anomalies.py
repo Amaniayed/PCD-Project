@@ -113,7 +113,7 @@ def main():
     summary_df.to_csv(summary_path, index=False)
 
     print("\nDetection summary saved to:", summary_path)
-    best_k = 2 
+    best_k = 2.5 
     best_threshold = compute_threshold(model, val_tensor, best_k)
     best_preds, best_mse = detect_on_test(model, test_tensor, best_threshold)
 
