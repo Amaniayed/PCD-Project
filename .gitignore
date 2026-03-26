@@ -8,6 +8,7 @@ venv/
 # --- Données et Modèles (Souvent trop volumineux pour Git) ---
 
 data/processed/
+backend/node_modules
 
 # --- VS Code ---
 .vscode/
