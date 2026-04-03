@@ -53,7 +53,7 @@ def train():
     train_data, temp_data = train_test_split(data_tensor, test_size=0.3,  random_state=42)
     val_data,   test_data = train_test_split(temp_data,   test_size=1/3,  random_state=42)
 
-    print(f"  Split → Train: {len(train_data)} | Val: {len(val_data)} | Test: {len(test_data)}")
+    print(f"  Split -> Train: {len(train_data)} | Val: {len(val_data)} | Test: {len(test_data)}")
 
     # ── Sauvegarder validation
     val_df = pd.DataFrame(val_data.numpy(), columns=consumption_cols)
@@ -119,7 +119,7 @@ def train():
             epochs_no_improve = 0
             torch.save(model.state_dict(),
                        os.path.join(SAVE_PATH, "autoencoder_lstm_generated_best.pth"))
-            print("  ← best ")
+            print("  <- best ")
         else:
             epochs_no_improve += 1
             print()

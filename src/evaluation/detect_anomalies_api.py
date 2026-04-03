@@ -58,7 +58,7 @@ def main():
     csv_path   = sys.argv[1]
     model_path = sys.argv[2]
     val_path   = sys.argv[3]
-    k          = 3  
+    k          = 2.5
 
     CONSUMPTION_COLS = [f"m_{i}" for i in range(1, 1441)]
 

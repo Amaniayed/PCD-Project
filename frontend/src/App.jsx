@@ -1,4 +1,11 @@
-import { BrowserRouter, Routes, Route, Navigate, Link, useLocation } from "react-router-dom";
+import {
+  BrowserRouter,
+  Routes,
+  Route,
+  Navigate,
+  Link,
+  useLocation,
+} from "react-router-dom";
 import { authService } from "./services/api";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
@@ -9,15 +16,19 @@ import Analysisboth from "./pages/Analysisboth";
 
 // ─── Auth Guard ───────────────────────────────────────────
 function RequireAuth({ children }) {
-  return authService.isAuthenticated() ? children : <Navigate to="/login" replace />;
+  return authService.isAuthenticated() ? (
+    children
+  ) : (
+    <Navigate to="/login" replace />
+  );
 }
 
 // ─── Sidebar Nav ──────────────────────────────────────────
 const NAV = [
-  { to: "/dashboard", icon: "◈", label: "Dashboard"  },
-  { to: "/data",      icon: "⊞", label: "Data"        },
-  { to: "/analysis",  icon: "⌬", label: "Analysis"    }, 
-  { to: "/analysisboth",  icon: "⌬", label: "Analysisboth"    }, 
+  { to: "/dashboard", icon: "◈", label: "Dashboard" },
+  { to: "/data", icon: "⊞", label: "Data" },
+  { to: "/analysis", icon: "⌬", label: "Analysis" },
+  { to: "/analysisboth", icon: "⌬", label: "Analysisboth" },
 ];
 
 function Sidebar() {
@@ -37,7 +48,9 @@ function Sidebar() {
           <Link
             key={n.to}
             to={n.to}
-            className={`nav-link ${loc.pathname.startsWith(n.to) ? "active" : ""}`}
+            className={`nav-link ${
+              loc.pathname.startsWith(n.to) ? "active" : ""
+            }`}
           >
             <span className="nav-icon">{n.icon}</span>
             {n.label}
@@ -123,23 +136,50 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/login"  element={<Login />} />
+        <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
-
-        <Route path="/dashboard" element={
-          <RequireAuth><AppShell><Dashboard /></AppShell></RequireAuth>
-        }/>
-
-        <Route path="/data" element={
-          <RequireAuth><AppShell><Data /></AppShell></RequireAuth>
-        }/>
-        <Route path="/analysis" element={
-          <RequireAuth><AppShell><Analysis /></AppShell></RequireAuth>
-        }/>
-        <Route path="/Analysisboth" element={
-          <RequireAuth><AppShell><Analysisboth /></AppShell></RequireAuth>
-        }/>
-
+        <Route
+          path="/dashboard"
+          element={
+            <RequireAuth>
+              <AppShell>
+                <Dashboard />
+              </AppShell>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/data"
+          element={
+            <RequireAuth>
+              <AppShell>
+                <Data />
+              </AppShell>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/analysis"
+          element={
+            <RequireAuth>
+              <AppShell>
+                <Analysis />
+              </AppShell>
+            </RequireAuth>
+          }
+        />
+        // Locate the Routes section in your App.jsx and update this specific
+        line:
+        <Route
+          path="/analysisboth"
+          element={
+            <RequireAuth>
+              <AppShell>
+                <Analysisboth />
+              </AppShell>
+            </RequireAuth>
+          }
+        />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
     </BrowserRouter>

@@ -7,11 +7,13 @@ const cors    = require("cors");
 const authRoutes    = require("./routes/auth");
 const homeRoutes    = require("./routes/homes");
 const datasetRoutes = require("./routes/datasets");
-const analyzeRoutes = require("./routes/analyze");      // ← NEW
+const analyzeRoutes = require("./routes/analyze");     
+const dashboardRoutes = require("./routes/dashboard");
 
 const { createUsersTable }    = require("./models/User");
 const { createHomesTable }    = require("./models/Home");
 const { createDatasetsTable } = require("./models/Dataset");
+const { createAnalysisResultsTable } = require("./models/AnalysisResult");
 
 const app = express();
 
@@ -26,7 +28,8 @@ app.use(express.json());
 app.use("/auth",     authRoutes);
 app.use("/homes",    homeRoutes);
 app.use("/datasets", datasetRoutes);
-app.use("/analyze",  analyzeRoutes);                    // ← NEW
+app.use("/analyze",  analyzeRoutes);                 
+app.use("/dashboard", dashboardRoutes);
 
 // ── Health check ──────────────────────────────────────────────────────────────
 app.get("/", (req, res) => res.json({ status: "ok" }));
@@ -38,6 +41,7 @@ const start = async () => {
   await createUsersTable();
   await createHomesTable();
   await createDatasetsTable();
+  await createAnalysisResultsTable();
   app.listen(PORT, () => {
     console.log(`🚀 Server running on http://localhost:${PORT}`);
   });

@@ -3,7 +3,11 @@ import pandas as pd
 import numpy as np
 import os
 import sys
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from sklearn.metrics import precision_score, recall_score, f1_score
+
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if project_root not in sys.path:
     sys.path.append(project_root)
@@ -16,149 +20,252 @@ except ImportError:
     except ImportError:
         sys.path.append(os.path.join(project_root, "src"))
         from models.autoencoder import Autoencoder
-from sklearn.metrics import precision_score, recall_score, f1_score
+
+
+# ─── Threshold ────────────────────────────────────────────────────────────────
 def compute_threshold(model, val_tensor, k):
     model.eval()
     with torch.no_grad():
         recon = model(val_tensor)
-        mse = torch.mean((val_tensor - recon)**2, dim=1).numpy()
-
-    mu = np.mean(mse)
+        mse = torch.mean((val_tensor - recon) ** 2, dim=1).numpy()
+    mu    = np.mean(mse)
     sigma = np.std(mse)
-    threshold = mu + k * sigma
-    return threshold
+    return mu + k * sigma, mu, sigma, mse   # also return val_mse for plotting
 
-def detect_on_test(model, test_tensor, threshold):
-    model.eval()
-    with torch.no_grad():
-        recon = model(test_tensor)
-        mse = torch.mean((test_tensor - recon)**2, dim=1).numpy()
 
-    preds = (mse > threshold).astype(int)
-    return preds, mse
+# ─── Anomaly type classifier (heuristic on residual shape) ────────────────────
+def classify_anomaly(original, reconstruction):
+    error = (original - reconstruction) ** 2
+    total_error = np.sum(error)
+    if total_error == 0:
+        return "None"
 
+    segments = {
+        "Nuit":       np.sum(error[0:360]),
+        "Matin":      np.sum(error[360:720]),
+        "Apres-midi": np.sum(error[720:1080]),
+        "Soir":       np.sum(error[1080:1440])
+    }
+
+    max_segment_error  = max(segments.values())
+    error_concentration = max_segment_error / total_error
+
+    if error_concentration > 0.6:
+        return "Duration"
+
+    order_error_share = (segments["Matin"] + segments["Soir"]) / total_error
+    if order_error_share > 0.7:
+        return "Order"
+
+    return "Temporal Shift"
+
+
+# ─── Main ─────────────────────────────────────────────────────────────────────
 def main():
-    base_dir = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..")
-    )
+    base_dir = project_root
+
     model_path = os.path.join(base_dir, "models", "saved_models", "autoencoder_best.pth")
+    if not os.path.exists(model_path):
+        model_path = os.path.join(os.getcwd(), "models", "saved_models", "autoencoder_best.pth")
+
     normal_val_path = os.path.join(base_dir, "data", "validation", "normal_validation_dataset.csv")
+    if not os.path.exists(normal_val_path):
+        normal_val_path = os.path.join(os.getcwd(), "data", "validation", "normal_validation_dataset.csv")
 
     anomalous_path = os.path.join(base_dir, "data", "anomalous", "anomalous_dataset.csv")
-    
+    if not os.path.exists(anomalous_path):
+        anomalous_path = os.path.join(os.getcwd(), "data", "anomalous", "anomalous_dataset.csv")
+
+    figures_dir = os.path.join(base_dir, "reports", "figures")
+    results_dir = os.path.join(os.getcwd(), "data", "results")
+    os.makedirs(figures_dir, exist_ok=True)
+    os.makedirs(results_dir, exist_ok=True)
+
     if not os.path.exists(model_path):
-        print("Model not found. Please run train_autoencoder.py first.")
+        print(f"ERREUR : Modèle non trouvé à {model_path}")
         return
-    
+
+    # ── Load model ────────────────────────────────────────────────────────────
     model = Autoencoder(input_dim=1440)
-    model.load_state_dict(torch.load(model_path))
+    model.load_state_dict(torch.load(model_path, map_location="cpu"))
     model.eval()
-    
-    val_df = pd.read_csv(normal_val_path)
-    consumption_cols = [f"m_{i}" for i in range(1, 1441)]
 
-    val_data = val_df[consumption_cols].values
-    val_tensor = torch.tensor(val_data, dtype=torch.float32)
-
+    # ── Load data ─────────────────────────────────────────────────────────────
     test_df = pd.read_csv(anomalous_path)
-    test_data = test_df[consumption_cols].values
-    true_labels = test_df["is_anomaly"].values
-    anomaly_types = test_df["anomaly_type"].values
+    consumption_cols = [c for c in test_df.columns if c.startswith('m_')]
+    if len(consumption_cols) < 1440:
+        consumption_cols = test_df.select_dtypes(include=[np.number]).columns.tolist()
+        consumption_cols = [c for c in consumption_cols
+                            if c not in ['is_anomaly', 'Scenario', 'is_weekend', 'day_of_week']]
+        if len(consumption_cols) > 1440:
+            consumption_cols = consumption_cols[:1440]
 
+    test_data   = test_df[consumption_cols].values
     test_tensor = torch.tensor(test_data, dtype=torch.float32)
 
+    with torch.no_grad():
+        recon_tensor = model(test_tensor)
+        recon_data   = recon_tensor.numpy()
+        test_mse     = torch.mean((test_tensor - recon_tensor) ** 2, dim=1).numpy()
 
-    k_values = [1, 1.5, 2, 2.5, 3, 3.5, 4, 5]
+    # ── Validation threshold ──────────────────────────────────────────────────
+    val_df   = pd.read_csv(normal_val_path)
+    val_data = val_df[consumption_cols].values
+    val_tensor = torch.tensor(val_data, dtype=torch.float32)
+    _, mu_val, sigma_val, val_mse = compute_threshold(model, val_tensor, k=0)
 
-    summary = []
+    # ── k sweep (info only) ───────────────────────────────────────────────────
+    k_values = [1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0]
+    results_summary = []
+    print("\n--- Analyse de la sensibilite (k) ---")
+    evaluation_results = []
+     # Load labeled dataset
+    labeled_path = os.path.join(base_dir, "data", "anomalous", "anomalous_dataset_labeled.csv")
+    labeled_df = pd.read_csv(labeled_path)
+
+    y_true = labeled_df["is_anomaly"].values
     for k in k_values:
-        threshold = compute_threshold(model, val_tensor, k)
-        preds, mse = detect_on_test(model, test_tensor, threshold)
-        
-        precision = precision_score(true_labels, preds, zero_division=0)
-        recall = recall_score(true_labels, preds, zero_division=0)
-        f1 = f1_score(true_labels, preds, zero_division=0)
-        
-        type_recall = {}
-        for t in ["Temporal Shift", "Duration", "Order"]:
-            mask = anomaly_types == t
-            if np.sum(mask) > 0:
-                type_recall[t] = recall_score(
-                    true_labels[mask], preds[mask], zero_division=0
-                )
-            else:
-                type_recall[t] = 0.0
-        
-        summary.append({
-            "k": k,
-                "threshold": threshold,
-                "precision": precision,
-                "recall": recall,
-                "f1": f1,
-                "recall_temporal": type_recall["Temporal Shift"],
-                "recall_duration": type_recall["Duration"],
-                "recall_order": type_recall["Order"],
-                "detected_count": np.sum(preds),
-                "total_anomalies": np.sum(true_labels),
-        })
-        print(
-            f"k={k} | Precision={precision:.3f} | Recall={recall:.3f} | F1={f1:.3f}"
-        )
-    
-    results_dir = os.path.join(os.getcwd(), "data", "results")
-    os.makedirs(results_dir, exist_ok=True) 
+        thresh = mu_val + k * sigma_val
+        preds_k = (test_mse > thresh).astype(int)
 
-    summary_df = pd.DataFrame(summary)
-    summary_path = os.path.join(results_dir, "detection_summary.csv")
-    summary_df.to_csv(summary_path, index=False)
+        precision = precision_score(y_true, preds_k)
+        recall = recall_score(y_true, preds_k)
+        f1 = f1_score(y_true, preds_k)
 
-    print("\nDetection summary saved to:", summary_path)
-    best_k = 2.5 
-    best_threshold = compute_threshold(model, val_tensor, best_k)
-    best_preds, best_mse = detect_on_test(model, test_tensor, best_threshold)
+        results_summary.append({
+        "k": k,
+        "precision": precision,
+        "recall": recall,
+        "f1_score": f1,
+        "percentage": np.mean(preds_k) * 100
+    })
 
-    test_df["reconstruction_error"] = best_mse
-    test_df["predicted_label"] = best_preds
+        print(f"k={k} | Precision={precision:.3f} | Recall={recall:.3f} | F1={f1:.3f}")
+    # ─────────────────────────────────────────────────────────────
+    # PLOT 3 — Sensitivity analysis (k vs detection rate)
+    # ────────────────────────────────────────────────────────────
+    # ── Best k = 2.5 ─────────────────────────────────────────────────────────
+    best_k    = 3
+    threshold = mu_val + best_k * sigma_val
+    preds     = (test_mse > threshold).astype(int)
 
-    error_output_path = os.path.join(results_dir, "test_with_errors.csv")
-    test_df.to_csv(error_output_path, index=False)
+    predicted_types = []
+    for i in range(len(test_df)):
+        if preds[i] == 1:
+            predicted_types.append(classify_anomaly(test_data[i], recon_data[i]))
+        else:
+            predicted_types.append("None")
 
-    print("Saved reconstruction errors to:", error_output_path)
+    test_df["reconstruction_error"] = test_mse
+    test_df["predicted_label"]      = preds
+    test_df["predicted_type"]       = predicted_types
+
+    print(f"\n--- Resultats de la detection (k={best_k}) ---")
+    print(f"Total anomalies detectees : {int(np.sum(preds))} / {len(test_df)}")
+    type_counts = pd.Series(predicted_types).value_counts()
+    if "None" in type_counts:
+        type_counts = type_counts.drop("None")
+    print("\nBreakdown estime par type d'anomalie :")
+    for atype, count in type_counts.items():
+        print(f"  {atype:<20}: {count}")
+
+    # Save CSV
+    test_df.to_csv(os.path.join(results_dir, "detection_results_classified.csv"), index=False)
+    print(f"\nResultats sauvegardes dans : data/results/detection_results_classified.csv")
     
 
-    plt.figure(figsize=(8,6))
+   
+    y_pred = preds
 
-    plt.plot(summary_df["k"], summary_df["precision"], marker='o', label="Precision")
-    plt.plot(summary_df["k"], summary_df["recall"], marker='o', label="Recall")
-    plt.plot(summary_df["k"], summary_df["f1"], marker='o', label="F1-score")
+    precision = precision_score(y_true, y_pred)
+    recall = recall_score(y_true, y_pred)
+    f1 = f1_score(y_true, y_pred)
 
-    plt.xlabel("k value")
-    plt.ylabel("Score")
-    plt.title("Performance Metrics vs k")
-    plt.legend()
-    plt.grid(True)
-    reports_dir = os.path.join(base_dir, "reports")
-    figures_dir = os.path.join(reports_dir, "figures")
-    plot1_path = os.path.join(figures_dir, "k_comparison_plot.png")
-    plt.savefig(plot1_path, dpi=150, bbox_inches='tight')
-    print(f"Graphique sauvegardé: {plot1_path}")
-    plt.show()
-    plt.figure(figsize=(8,6))
+    print("\n--- Evaluation Metrics ---")
+    print(f"Precision: {precision:.3f}")
+    print(f"Recall:    {recall:.3f}")
+    print(f"F1-score:  {f1:.3f}")
+    # ─────────────────────────────────────────────────────────────────────────
+    # PLOT 1 — Reconstruction error distribution (histogram) at best k
+    # ─────────────────────────────────────────────────────────────────────────
+    fig, ax = plt.subplots(figsize=(10, 4))
+    ax.hist(test_mse, bins=50, color="#4C72B0", alpha=0.75, edgecolor="white",
+            label="Reconstruction errors (test days)")
+    ax.axvline(threshold, color="red", linewidth=2, linestyle="--",
+               label=f"Threshold = {threshold:.4f}  (k={best_k})")
+    ax.set_xlabel("MSE par jour")
+    ax.set_ylabel("Nombre de jours")
+    ax.set_title("Distribution des erreurs de reconstruction ( Classic Autoencoder ) — TEST", fontweight="bold")
+    ax.legend()
+    ax.grid(alpha=0.3)
+    plt.tight_layout()
+    p1 = os.path.join(figures_dir, "01_error_distribution.png")
+    plt.savefig(p1, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"\nPlot 1 saved -> {p1}")
 
-    plt.plot(summary_df["k"], summary_df["recall_temporal"], marker='o', label="Temporal")
-    plt.plot(summary_df["k"], summary_df["recall_duration"], marker='o', label="Duration")
-    plt.plot(summary_df["k"], summary_df["recall_order"], marker='o', label="Order")
+    # ─────────────────────────────────────────────────────────────────────────
+    # PLOT 2 — Reconstruction error per day, coloured by anomaly type
+    # ─────────────────────────────────────────────────────────────────────────
+    TYPE_COLORS = {
+        "Temporal Shift": "#E74C3C",
+        "Duration":       "#F39C12",
+        "Order":          "#8E44AD",
+    }
 
-    plt.xlabel("k value")
-    plt.ylabel("Recall")
-    plt.title("Recall per Anomaly Type vs k")
-    plt.legend()
-    plt.grid(True)
-    plot1_path = os.path.join(figures_dir, "recall_per_type.png")
-    plt.savefig(plot1_path, dpi=150, bbox_inches='tight')
-    print(f"Graphique sauvegardé: {plot1_path}")
-    plt.show()
-    
+    fig, ax = plt.subplots(figsize=(14, 5))
+    ax.plot(test_mse, color="#4C72B0", linewidth=0.8,
+            label="Reconstruction MSE", zorder=1)
+    ax.axhline(threshold, color="red", linestyle="--", linewidth=1.2,
+               label=f"Threshold (k={best_k})", zorder=2)
+
+    # Scatter each anomaly type with its own colour
+    plotted_types = set()
+    for i, (mse_val, atype) in enumerate(zip(test_mse, predicted_types)):
+        if atype != "None":
+            color  = TYPE_COLORS.get(atype, "black")
+            label  = atype if atype not in plotted_types else "_nolegend_"
+            ax.scatter(i, mse_val, color=color, zorder=5, s=40,
+                       label=label, edgecolors="white", linewidths=0.4)
+            plotted_types.add(atype)
+
+    ax.set_xlabel("Jour (index)")
+    ax.set_ylabel("MSE")
+    ax.set_title(f"Anomaly Detection — Reconstruction Error per Day  (k={best_k})",
+                 fontweight="bold")
+    ax.legend()
+    ax.grid(alpha=0.3)
+    plt.tight_layout()
+    p2 = os.path.join(figures_dir, "02_anomalies_per_day.png")
+    plt.savefig(p2, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Plot 2 saved -> {p2}")
+    k_vals = [r["k"] for r in results_summary]
+    percentages = [r["percentage"] for r in results_summary]
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.plot(k_vals, percentages, marker='o', linewidth=2)
+    ax.set_xlabel("k value")
+    ax.set_ylabel("Detected anomalies (%)")
+    ax.set_title("Sensitivity Analysis of k (Threshold = μ + kσ)", fontweight="bold")
+    ax.grid(alpha=0.3)
+
+    for i, txt in enumerate(percentages):
+        ax.annotate(f"{txt:.1f}%", (k_vals[i], percentages[i]), textcoords="offset points", xytext=(0,5), ha='center')
+
+    plt.tight_layout()
+    p3 = os.path.join(figures_dir, "03_k_sensitivity.png")
+    plt.savefig(p3, dpi=150)
+    plt.close()
+
+    print(f"Plot 3 saved -> {p3}")
+    # Save sensitivity results to CSV
+    df_k = pd.DataFrame(results_summary)
+    csv_path = os.path.join(results_dir, "k_sensitivity_analysis.csv")
+    df_k.to_csv(csv_path, index=False)
+
+    print(f"k sensitivity results saved -> {csv_path}")
+
 
 if __name__ == "__main__":
     main()
