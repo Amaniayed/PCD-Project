@@ -1,6 +1,6 @@
+// src/services/api.js
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
-// ─── Auth ───────────────────────────────────────────────
 export const authService = {
   async login(email, password) {
     const res = await fetch(`${BASE_URL}/auth/login`, {
@@ -11,6 +11,8 @@ export const authService = {
     if (!res.ok) throw new Error((await res.json()).detail || "Login failed");
     const data = await res.json();
     localStorage.setItem("token", data.access_token);
+    // ← also store user object for easy access
+    localStorage.setItem("user", JSON.stringify(data.user));
     return data;
   },
 
@@ -26,10 +28,26 @@ export const authService = {
 
   logout() {
     localStorage.removeItem("token");
+    localStorage.removeItem("user");
   },
 
   getToken() {
     return localStorage.getItem("token");
+  },
+
+  // ← THIS WAS MISSING — causes crash in DoctorDashboard, MessageDoctor, App.jsx
+  getUser() {
+    try {
+      const raw = localStorage.getItem("user");
+      if (raw) return JSON.parse(raw);
+      // fallback: decode JWT payload
+      const token = localStorage.getItem("token");
+      if (!token) return null;
+      const payload = JSON.parse(atob(token.split(".")[1]));
+      return { id: payload.id, name: payload.name, email: payload.email, role: payload.role };
+    } catch {
+      return null;
+    }
   },
 
   isAuthenticated() {
@@ -102,6 +120,19 @@ export const anomalyService = {
   async getResults() {
     const res = await fetch(`${BASE_URL}/results`, { headers: authHeaders() });
     if (!res.ok) throw new Error("Failed to fetch results");
+    return res.json();
+  },
+};
+
+// ─── Analysis ─────────────────────────────────────────────
+export const analysisService = {
+  async analyze(datasetId, pipeline = "simulator") {
+    const res = await fetch(`${BASE_URL}/analyze/${datasetId}`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ pipeline }),
+    });
+    if (!res.ok) throw new Error((await res.json()).detail || "Analysis failed");
     return res.json();
   },
 };

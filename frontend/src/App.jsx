@@ -7,122 +7,164 @@ import {
   useLocation,
 } from "react-router-dom";
 import { authService } from "./services/api";
-import Login from "./pages/Login";
-import Signup from "./pages/Signup";
-import Dashboard from "./components/Dashboard";
-import Data from "./pages/Data";
-import Analysis from "./pages/Analysis";
-import Analysisboth from "./pages/Analysisboth";
+import Login           from "./pages/Login";
+import Signup          from "./pages/Signup";
+import Dashboard       from "./components/Dashboard";
+import Data            from "./pages/Data";
+import Analysis        from "./pages/Analysis";
+import MessageDoctor   from "./pages/MessageDoctor";
+import DoctorDashboard from "./pages/DoctorDashboard";
+import Alerts          from "./pages/Alerts";
+import DoctorOverview  from "./pages/DoctorOverview";
 
-// ─── Auth Guard ───────────────────────────────────────────
+// ─── Auth Guard ───────────────────────────────────────────────────────────────
 function RequireAuth({ children }) {
-  return authService.isAuthenticated() ? (
-    children
-  ) : (
-    <Navigate to="/login" replace />
-  );
+  return authService.isAuthenticated()
+    ? children
+    : <Navigate to="/login" replace />;
 }
 
-// ─── Sidebar Nav ──────────────────────────────────────────
-const NAV = [
-  { to: "/dashboard", icon: "◈", label: "Dashboard" },
-  { to: "/data", icon: "⊞", label: "Data" },
-  { to: "/analysis", icon: "⌬", label: "Analysis" },
-  { to: "/analysisboth", icon: "⌬", label: "Analysisboth" },
+// ─── Role Guard ───────────────────────────────────────────────────────────────
+function RequireRole({ role, children }) {
+  const user = authService.getUser?.() || null;
+  if (!authService.isAuthenticated()) return <Navigate to="/login" replace />;
+  if (user?.role !== role) {
+    return user?.role === "doctor"
+      ? <Navigate to="/doctor/overview" replace />
+      : <Navigate to="/dashboard" replace />;
+  }
+  return children;
+}
+
+// ─── Nav items per role ───────────────────────────────────────────────────────
+const NAV_CAREGIVER = [
+  { to: "/dashboard", icon: "◈",  label: "Dashboard"      },
+  { to: "/data",      icon: "⊞",  label: "Data"           },
+  { to: "/analysis",  icon: "⌬",  label: "Analysis"       },
+  { to: "/alerts",    icon: "🔔", label: "Alerts"         },
+  { to: "/messages",  icon: "📩", label: "Message Doctor" },
 ];
 
+const NAV_DOCTOR = [
+  { to: "/doctor/overview",  icon: "📊", label: "Overview"     },
+  { to: "/doctor/dashboard", icon: "🩺", label: "Medical View" },
+];
+
+// ─── Sidebar ──────────────────────────────────────────────────────────────────
 function Sidebar() {
-  const loc = useLocation();
+  const loc  = useLocation();
+  const user = authService.getUser?.() || null;
+  const role = user?.role || "caregiver";
+
+  const navItems = role === "doctor" ? NAV_DOCTOR : NAV_CAREGIVER;
+
   const handleLogout = () => {
     authService.logout();
-    window.location.href = "/login";
+    window.location.replace("/login");
   };
 
   return (
     <nav className="sidebar">
+      {/* Logo */}
       <div className="sidebar-logo">
-        <span>⬡</span> ElderGuard
+        <span>⬡</span>
+        <div>
+          <div className="logo-title">ElderGuard</div>
+          <div className="logo-sub">Monitoring System</div>
+        </div>
       </div>
+
+      {/* Role badge */}
+      <div className={`sidebar-role-badge sidebar-role-badge--${role}`}>
+        <span className="srb-emoji">{role === "doctor" ? "🧑‍⚕️" : "👩‍⚕️"}</span>
+        <div>
+          <div className="srb-role">{role === "doctor" ? "Doctor" : "Caregiver"}</div>
+          <div className="srb-name">{user?.name || "—"}</div>
+        </div>
+      </div>
+
+      {/* Nav links */}
       <div className="sidebar-links">
-        {NAV.map((n) => (
+        <div className="section-title">Navigation</div>
+        {navItems.map((n) => (
           <Link
-            key={n.to}
+            key={n.label}
             to={n.to}
-            className={`nav-link ${
-              loc.pathname.startsWith(n.to) ? "active" : ""
-            }`}
+            className={`nav-link ${loc.pathname === n.to ? "active" : ""}`}
           >
             <span className="nav-icon">{n.icon}</span>
-            {n.label}
+            <span>{n.label}</span>
           </Link>
         ))}
       </div>
+
       <button className="sidebar-logout" onClick={handleLogout}>
         ⏻ Logout
       </button>
 
       <style>{`
         .sidebar {
-          width: 220px;
-          min-height: 100vh;
-          background: rgba(255,255,255,0.025);
-          border-right: 1px solid rgba(255,255,255,0.07);
+          width: 240px;
+          background: #fff;
+          border-right: 1px solid #e8eaf0;
           display: flex;
           flex-direction: column;
           padding: 24px 16px;
-          flex-shrink: 0;
           font-family: 'DM Sans', sans-serif;
+          gap: 4px;
         }
         .sidebar-logo {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          font-size: 17px;
-          font-weight: 700;
-          color: #fff;
-          margin-bottom: 36px;
-          padding-left: 8px;
-          letter-spacing: -0.3px;
+          display: flex; gap: 12px; align-items: center; margin-bottom: 16px;
         }
-        .sidebar-logo span { color: #818cf8; font-size: 22px; }
-        .sidebar-links { display: flex; flex-direction: column; gap: 4px; flex: 1; }
+        .sidebar-logo span { font-size: 24px; color: #6366f1; }
+        .logo-title { font-weight: 700; font-size: 15px; }
+        .logo-sub   { font-size: 11px; color: #9aa0b4; }
+
+        .sidebar-role-badge {
+          display: flex; align-items: center; gap: 10px;
+          padding: 10px 12px; border-radius: 10px;
+          border: 1.5px solid; margin-bottom: 16px;
+        }
+        .sidebar-role-badge--caregiver { background:#e0f2fe; border-color:#7dd3fc; }
+        .sidebar-role-badge--doctor    { background:#f3e8ff; border-color:#c4b5fd; }
+        .srb-emoji { font-size: 22px; }
+        .srb-role  {
+          font-size: 11px; font-weight: 700;
+          letter-spacing: 0.5px; text-transform: uppercase;
+        }
+        .sidebar-role-badge--caregiver .srb-role { color: #0284c7; }
+        .sidebar-role-badge--doctor    .srb-role { color: #7c3aed; }
+        .srb-name  { font-size: 13px; color: #475569; font-weight: 500; margin-top: 1px; }
+
+        .section-title {
+          font-size: 11px; color: #9aa0b4; margin-bottom: 8px;
+          padding-left: 10px; text-transform: uppercase; letter-spacing: 0.5px;
+        }
         .nav-link {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          padding: 10px 12px;
-          border-radius: 10px;
-          text-decoration: none;
-          font-size: 14px;
-          font-weight: 500;
-          color: rgba(255,255,255,0.45);
-          transition: all 0.15s;
+          display: flex; align-items: center; gap: 12px;
+          padding: 10px 12px; border-radius: 10px;
+          color: #9196a8; text-decoration: none;
+          font-size: 14px; transition: 0.15s;
         }
-        .nav-link:hover { background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.8); }
-        .nav-link.active { background: rgba(99,102,241,0.2); color: #818cf8; }
-        .nav-icon { font-size: 16px; width: 20px; text-align: center; }
+        .nav-link:hover  { background: #f4f6fb; color: #4b5060; }
+        .nav-link.active { background: rgba(99,102,241,0.1); color: #6366f1; font-weight: 600; }
+        .nav-icon { font-size: 13px; }
+
         .sidebar-logout {
-          background: none;
-          border: 1px solid rgba(255,255,255,0.1);
-          color: rgba(255,255,255,0.3);
-          border-radius: 10px;
-          padding: 9px 14px;
-          font-size: 13px;
-          cursor: pointer;
-          text-align: left;
-          transition: all 0.15s;
-          font-family: inherit;
+          margin-top: auto; border: none; background: #f8f9fc;
+          padding: 10px; border-radius: 10px; cursor: pointer;
+          color: #b0b5c4; font-family: inherit; font-size: 13px; transition: 0.15s;
         }
-        .sidebar-logout:hover { border-color: rgba(248,113,113,0.4); color: #f87171; background: rgba(239,68,68,0.07); }
+        .sidebar-logout:hover { background: #fef2f2; color: #ef4444; }
       `}</style>
     </nav>
   );
 }
 
-// ─── App Shell ────────────────────────────────────────────
+// ─── App Shell ────────────────────────────────────────────────────────────────
 function AppShell({ children }) {
   return (
-    <div style={{ display: "flex", minHeight: "100vh", background: "#0a0a0f" }}>
+    <div style={{ display: "flex", minHeight: "100vh", background: "#f4f6fb" }}>
       <Sidebar />
       <main style={{ flex: 1, padding: "32px", overflowY: "auto" }}>
         {children}
@@ -131,56 +173,62 @@ function AppShell({ children }) {
   );
 }
 
-// ─── Routes ───────────────────────────────────────────────
+// ─── Routes ───────────────────────────────────────────────────────────────────
 export default function App() {
+  const user = authService.getUser?.() || null;
+
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/login" element={<Login />} />
+        {/* Public */}
+        <Route path="/login"  element={<Login />} />
         <Route path="/signup" element={<Signup />} />
-        <Route
-          path="/dashboard"
-          element={
-            <RequireAuth>
-              <AppShell>
-                <Dashboard />
-              </AppShell>
-            </RequireAuth>
-          }
-        />
-        <Route
-          path="/data"
-          element={
-            <RequireAuth>
-              <AppShell>
-                <Data />
-              </AppShell>
-            </RequireAuth>
-          }
-        />
-        <Route
-          path="/analysis"
-          element={
-            <RequireAuth>
-              <AppShell>
-                <Analysis />
-              </AppShell>
-            </RequireAuth>
-          }
-        />
-        // Locate the Routes section in your App.jsx and update this specific
-        line:
-        <Route
-          path="/analysisboth"
-          element={
-            <RequireAuth>
-              <AppShell>
-                <Analysisboth />
-              </AppShell>
-            </RequireAuth>
-          }
-        />
-        <Route path="*" element={<Navigate to="/dashboard" replace />} />
+
+        {/* ── Caregiver routes ── */}
+        <Route path="/dashboard" element={
+          <RequireRole role="caregiver">
+            <AppShell><Dashboard /></AppShell>
+          </RequireRole>
+        }/>
+        <Route path="/data" element={
+          <RequireRole role="caregiver">
+            <AppShell><Data /></AppShell>
+          </RequireRole>
+        }/>
+        <Route path="/analysis" element={
+          <RequireRole role="caregiver">
+            <AppShell><Analysis /></AppShell>
+          </RequireRole>
+        }/>
+        <Route path="/alerts" element={
+          <RequireRole role="caregiver">
+            <AppShell><Alerts /></AppShell>
+          </RequireRole>
+        }/>
+        <Route path="/messages" element={
+          <RequireRole role="caregiver">
+            <AppShell><MessageDoctor /></AppShell>
+          </RequireRole>
+        }/>
+
+        {/* ── Doctor routes ── */}
+        <Route path="/doctor/overview" element={
+          <RequireRole role="doctor">
+            <AppShell><DoctorOverview /></AppShell>
+          </RequireRole>
+        }/>
+        <Route path="/doctor/dashboard" element={
+          <RequireRole role="doctor">
+            <AppShell><DoctorDashboard /></AppShell>
+          </RequireRole>
+        }/>
+
+        {/* Catch-all */}
+        <Route path="*" element={
+          user?.role === "doctor"
+            ? <Navigate to="/doctor/overview" replace />
+            : <Navigate to="/dashboard" replace />
+        }/>
       </Routes>
     </BrowserRouter>
   );

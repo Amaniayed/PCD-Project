@@ -60,7 +60,32 @@ const getLatestByUser = async (userId) => {
   );
   return result.rows[0] || null;
 };
+const getAllResultsForDoctor = async (doctor_id) => {
+  const result = await pool.query(`
+    SELECT 
+      ar.id,
+      ar.total_anomalies,
+      ar.analyzed_at,
+      h.name AS home_name
+    FROM analysis_results ar
+    LEFT JOIN homes h ON h.id = ar.home_id
+    WHERE h.doctor_id = $1   -- ✅ IMPORTANT
+    ORDER BY ar.analyzed_at DESC
+  `, [doctor_id]);
 
+  return result.rows;
+};
+const getDoctorOverview = async (req, res) => {
+  try {
+    const doctor_id = req.user.id; // ✅ from token
+
+    const results = await getAllResultsForDoctor(doctor_id);
+
+    res.json(results);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
 // Get recent anomalies across all analyses for a user
 const getRecentAnomalies = async (userId, limit = 5) => {
   const result = await pool.query(
@@ -100,4 +125,5 @@ module.exports = {
   getLatestByUser,
   getRecentAnomalies,
   getDashboardStats,
+  getAllResultsForDoctor
 };

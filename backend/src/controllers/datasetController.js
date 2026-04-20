@@ -32,13 +32,15 @@ const upload = multer({
 // ─── GET all datasets (all homes of user) ─────────────────
 const getAll = async (req, res) => {
   try {
+    console.log("USER 👉", req.user); // ADD THIS
+
     const datasets = await findAllByUser(req.user.id);
     res.json(datasets);
   } catch (err) {
-    res.status(500).json({ detail: "Failed to fetch datasets." });
+    console.error("❌ ERROR:", err); // ADD THIS
+    res.status(500).json({ detail: err.message });
   }
 };
-
 // ─── GET datasets by home ─────────────────────────────────
 const getByHome = async (req, res) => {
   try {

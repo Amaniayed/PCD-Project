@@ -1,32 +1,141 @@
 const { spawn } = require("child_process");
 const path       = require("path");
 const fs         = require("fs");
+const { saveResult, getAllResultsForDoctor } = require("../models/AnalysisResult");
+const pool = require("../config/db");
+
 const PROJECT_ROOT  = path.resolve(__dirname, "..", "..", "..");
 const PYTHON_SCRIPT = path.join(PROJECT_ROOT, "src", "evaluation", "detect_anomalies_api.py");
-const MODEL_PATH    = path.join(PROJECT_ROOT, "models", "saved_models", "autoencoder_best.pth");
-const VAL_PATH      = path.join(PROJECT_ROOT, "data", "validation", "normal_validation_dataset.csv");
+const MODELS_DIR    = path.join(PROJECT_ROOT, "models", "saved_models");
+const VAL_DIR       = path.join(PROJECT_ROOT, "data", "validation");
+const PROCESSED_DIR = path.join(PROJECT_ROOT, "data", "processed");
 
-const PYTHON_BIN = process.env.PYTHON_BIN || "python3";
+// ── Resolve Python binary ─────────────────────────────────────────────────────
+function resolvePythonBin() {
+  if (process.env.PYTHON_BIN) return process.env.PYTHON_BIN;
+  const candidates = [
+    path.join(PROJECT_ROOT, ".venv", "Scripts", "python.exe"),
+    path.join(PROJECT_ROOT, ".venv", "bin", "python"),
+    path.join(PROJECT_ROOT, ".venv", "bin", "python3"),
+    "python3",
+    "python",
+  ];
+  for (const c of candidates) {
+    if (c === "python3" || c === "python") return c;
+    if (fs.existsSync(c)) return c;
+  }
+  return "python3";
+}
+
+const PYTHON_BIN = resolvePythonBin();
 
 /**
- * POST /analyze/:datasetId
+ * Resolve which processed CSV to use as the scaler source.
+ * Tries house-specific files first, then falls back to generic processed files.
  */
+function resolveProcessedCsv(houseId) {
+  const candidates = [
+    path.join(PROCESSED_DIR, `processed_refit_house${houseId}.csv`),
+    path.join(PROCESSED_DIR, `processed_refit_house2.csv`),   // default house
+    path.join(PROCESSED_DIR, `processed_refit_house1.csv`),
+    path.join(PROCESSED_DIR, `processed_full_year_dataset.csv`),
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
+/**
+ * Resolve validation CSV path.
+ * Returns the VAL_DIR (the Python script will look inside it for the right file)
+ * or a specific validation file if found.
+ */
+function resolveValPath(houseId) {
+  const specific = path.join(VAL_DIR, `lstm_refit_house${houseId}_validation.csv`);
+  if (fs.existsSync(specific)) return specific;
+
+  // Fallback: pass the whole VAL_DIR — script handles the lookup
+  if (fs.existsSync(VAL_DIR)) return VAL_DIR;
+
+  return null;
+}
+
+/**
+ * Check that at least one LSTM model exists in models_dir.
+ */
+function hasAnyLstmModel() {
+  if (!fs.existsSync(MODELS_DIR)) return false;
+  const lstmNames = [
+    "autoencoder_lstm_refit_house1_best.pth",
+    "autoencoder_lstm_refit_house2_best.pth",
+    "autoencoder_lstm_refit_best.pth",
+    "autoencoder_lstm_generated_best.pth",
+  ];
+  return lstmNames.some((n) => fs.existsSync(path.join(MODELS_DIR, n)));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /analyze/:datasetId
+// ─────────────────────────────────────────────────────────────────────────────
 const analyzeDataset = (req, res) => {
   const filePath = req.datasetFilePath;
+  const dataset  = req.dataset;
+
+  // ── Check LSTM model availability ─────────────────────────
+  if (!hasAnyLstmModel()) {
+    const found = fs.existsSync(MODELS_DIR)
+      ? fs.readdirSync(MODELS_DIR).filter((f) => f.endsWith(".pth"))
+      : [];
+    return res.status(503).json({
+      detail:       "No LSTM model found. Train at least one LSTM model first.",
+      hint:         "Run inject_and_detectrefit_lstm.py or train_autoencoder_lstm.py.",
+      models_found: found,
+      models_dir:   MODELS_DIR,
+    });
+  }
 
   if (!fs.existsSync(filePath)) {
     return res.status(404).json({ detail: "CSV file not found on disk." });
   }
-  if (!fs.existsSync(MODEL_PATH)) {
+
+  // ── Resolve house ID from dataset metadata (default 2) ────
+  const houseId = dataset.house_id || 2;
+
+  // ── Resolve paths ─────────────────────────────────────────
+  const processedCsv = resolveProcessedCsv(houseId);
+  if (!processedCsv) {
     return res.status(503).json({
-      detail: "Model not trained yet. Please run train_autoencoder.py first.",
-      model_path: MODEL_PATH,
+      detail: "No processed REFIT CSV found for scaler fitting.",
+      hint:   `Expected a file like processed_refit_house${houseId}.csv in data/processed/`,
     });
   }
 
-  // Call: python detect_anomalies_api.py <csv_path> <model_path> <val_path>
-  const args = [PYTHON_SCRIPT, filePath, MODEL_PATH, VAL_PATH];
-  console.log(`[analyze] Running: ${PYTHON_BIN} ${args.join(" ")}`);
+  const valPath = resolveValPath(houseId);
+  if (!valPath) {
+    return res.status(503).json({
+      detail: "Validation data directory not found.",
+      hint:   `Expected ${VAL_DIR} to exist.`,
+    });
+  }
+
+  // ── Build Python args ─────────────────────────────────────
+  // detect_anomalies_api.py <csv> <models_dir> <val_path> <processed_csv> [house_id]
+  const args = [
+    PYTHON_SCRIPT,
+    filePath,
+    MODELS_DIR,
+    valPath,
+    processedCsv,
+    String(houseId),
+  ];
+
+  console.log(`[analyze] Python     : ${PYTHON_BIN}`);
+  console.log(`[analyze] CSV        : ${filePath}`);
+  console.log(`[analyze] Models dir : ${MODELS_DIR}`);
+  console.log(`[analyze] Val path   : ${valPath}`);
+  console.log(`[analyze] Processed  : ${processedCsv}`);
+  console.log(`[analyze] House ID   : ${houseId}`);
 
   const py   = spawn(PYTHON_BIN, args);
   let stdout = "";
@@ -35,28 +144,93 @@ const analyzeDataset = (req, res) => {
   py.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
   py.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
 
-  py.on("close", (code) => {
+  py.on("close", async (code) => {
     if (code !== 0) {
-      console.error("[analyze] Python error:\n", stderr);
+      console.error("[analyze] Python exited with code", code);
+      console.error("[analyze] stderr:\n", stderr);
       return res.status(500).json({
-        detail: "Analysis failed.",
-        python_error: stderr.slice(-500),
+        detail:       "Analysis failed.",
+        python_error: stderr.slice(-1200),
       });
     }
+
     try {
-      const result = JSON.parse(stdout.trim());
+      const lines    = stdout.trim().split("\n");
+      const jsonLine = lines.slice().reverse().find((l) => l.trim().startsWith("{"));
+      if (!jsonLine) throw new Error("No JSON in Python output.\nstdout: " + stdout.slice(-400));
+
+      const result = JSON.parse(jsonLine);
       if (result.error) return res.status(400).json({ detail: result.error });
-      return res.json(result);
-    } catch {
-      return res.status(500).json({ detail: "Invalid output from analysis script." });
+
+      // ── Save to DB ────────────────────────────────────────
+      try {
+        await saveResult({
+          dataset_id:      dataset.id,
+          home_id:         dataset.home_id,
+          user_id:         req.user.id,
+          pipeline:        "REFIT",
+          total_days:      result.total_days,
+          total_anomalies: result.total_anomalies,
+          threshold:       result.threshold,
+          type_counts:     result.type_counts,
+          anomalies:       result.anomalies,
+        });
+        console.log("[analyze] Result saved to DB");
+      } catch (dbErr) {
+        console.error("[analyze] DB save failed (non-fatal):", dbErr.message);
+      }
+
+      console.log(`[analyze] Done — ${result.total_days} days, ${result.total_anomalies} anomalies`);
+      return res.json({ ...result, pipeline: "REFIT" });
+
+    } catch (e) {
+      console.error("[analyze] Parse error:", e.message);
+      return res.status(500).json({
+        detail: "Invalid output from analysis script.",
+        raw:    stdout.slice(-400),
+      });
     }
   });
 
   py.on("error", (err) => {
-    res.status(500).json({
-      detail: `Cannot start Python. Make sure '${PYTHON_BIN}' is installed.`,
+    console.error("[analyze] Cannot spawn Python:", err.message);
+    return res.status(500).json({
+      detail: `Cannot start Python ('${PYTHON_BIN}'). Set PYTHON_BIN in your .env file.`,
+      hint:   "Example: PYTHON_BIN=C:\\path\\to\\.venv\\Scripts\\python.exe",
     });
   });
 };
 
-module.exports = { analyzeDataset };
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /analyze/doctor/overview
+// ─────────────────────────────────────────────────────────────────────────────
+const getDoctorOverview = async (req, res) => {
+  try {
+    const results = await getAllResultsForDoctor(req.user.id);
+    return res.json(results);
+  } catch (err) {
+    console.error("[analyze] getDoctorOverview:", err.message);
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /analyze/results
+// ─────────────────────────────────────────────────────────────────────────────
+const getResults = async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT ar.*, d.file_name, h.name AS home_name
+       FROM analysis_results ar
+       JOIN datasets d ON d.id = ar.dataset_id
+       JOIN homes    h ON h.id = d.home_id
+       ORDER BY ar.analyzed_at DESC`
+    );
+    return res.json(rows);
+  } catch (err) {
+    console.error("[analyze] getResults:", err.message);
+    return res.status(500).json({ detail: "Failed to fetch results." });
+  }
+};
+
+module.exports = { analyzeDataset, getDoctorOverview, getResults };
