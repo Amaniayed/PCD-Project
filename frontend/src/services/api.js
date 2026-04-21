@@ -1,6 +1,19 @@
-// src/services/api.js
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
+// ─── JWT decoder (no library needed) ─────────────────────
+function decodeToken(token) {
+  try {
+    const payload = token.split(".")[1];
+    // atob works in browser; add padding if needed
+    const base64 = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const padded  = base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), "=");
+    return JSON.parse(atob(padded));
+  } catch {
+    return null;
+  }
+}
+
+// ─── Auth ────────────────────────────────────────────────
 export const authService = {
   async login(email, password) {
     const res = await fetch(`${BASE_URL}/auth/login`, {
@@ -10,17 +23,29 @@ export const authService = {
     });
     if (!res.ok) throw new Error((await res.json()).detail || "Login failed");
     const data = await res.json();
+
+    // Save token
     localStorage.setItem("token", data.access_token);
-    // ← also store user object for easy access
-    localStorage.setItem("user", JSON.stringify(data.user));
+
+    // Decode and save user info (id, name, email, role) from JWT payload
+    // Also merge any user object the backend sends directly
+    const decoded = decodeToken(data.access_token);
+    const user = {
+      id:    data.user?.id    ?? decoded?.id    ?? decoded?.sub ?? null,
+      name:  data.user?.name  ?? decoded?.name  ?? "",
+      email: data.user?.email ?? decoded?.email ?? email,
+      role:  data.user?.role  ?? decoded?.role  ?? "caregiver",
+    };
+    localStorage.setItem("user", JSON.stringify(user));
+
     return data;
   },
 
-  async signup(name, email, password) {
+  async signup(name, email, password, role = "caregiver") {
     const res = await fetch(`${BASE_URL}/auth/signup`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, email, password }),
+      body: JSON.stringify({ name, email, password, role }),
     });
     if (!res.ok) throw new Error((await res.json()).detail || "Signup failed");
     return res.json();
@@ -35,23 +60,34 @@ export const authService = {
     return localStorage.getItem("token");
   },
 
-  // ← THIS WAS MISSING — causes crash in DoctorDashboard, MessageDoctor, App.jsx
+  // Returns the saved user object { id, name, email, role }
   getUser() {
     try {
       const raw = localStorage.getItem("user");
       if (raw) return JSON.parse(raw);
-      // fallback: decode JWT payload
-      const token = localStorage.getItem("token");
+      // Fallback: decode from token if user key is missing
+      const token = this.getToken();
       if (!token) return null;
-      const payload = JSON.parse(atob(token.split(".")[1]));
-      return { id: payload.id, name: payload.name, email: payload.email, role: payload.role };
+      return decodeToken(token);
     } catch {
       return null;
     }
   },
 
   isAuthenticated() {
-    return !!localStorage.getItem("token");
+    const token = localStorage.getItem("token");
+    if (!token) return false;
+    // Check expiry from JWT payload
+    const decoded = decodeToken(token);
+    if (decoded?.exp && decoded.exp * 1000 < Date.now()) {
+      this.logout(); // auto-clear expired token
+      return false;
+    }
+    return true;
+  },
+
+  getRole() {
+    return this.getUser()?.role || null;
   },
 };
 
@@ -120,19 +156,6 @@ export const anomalyService = {
   async getResults() {
     const res = await fetch(`${BASE_URL}/results`, { headers: authHeaders() });
     if (!res.ok) throw new Error("Failed to fetch results");
-    return res.json();
-  },
-};
-
-// ─── Analysis ─────────────────────────────────────────────
-export const analysisService = {
-  async analyze(datasetId, pipeline = "simulator") {
-    const res = await fetch(`${BASE_URL}/analyze/${datasetId}`, {
-      method: "POST",
-      headers: authHeaders(),
-      body: JSON.stringify({ pipeline }),
-    });
-    if (!res.ok) throw new Error((await res.json()).detail || "Analysis failed");
     return res.json();
   },
 };

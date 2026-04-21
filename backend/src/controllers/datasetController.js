@@ -1,6 +1,7 @@
 const path    = require("path");
 const fs      = require("fs");
 const multer  = require("multer");
+const pool    = require("../config/db");
 const { findAllByHome, findAllByUser, findById, createDataset, updateDataset, deleteDataset } = require("../models/Dataset");
 const { findById: findHome } = require("../models/Home");
 
@@ -32,15 +33,14 @@ const upload = multer({
 // ─── GET all datasets (all homes of user) ─────────────────
 const getAll = async (req, res) => {
   try {
-    console.log("USER 👉", req.user); // ADD THIS
-
     const datasets = await findAllByUser(req.user.id);
     res.json(datasets);
   } catch (err) {
-    console.error("❌ ERROR:", err); // ADD THIS
+    console.error("❌ ERROR:", err);
     res.status(500).json({ detail: err.message });
   }
 };
+
 // ─── GET datasets by home ─────────────────────────────────
 const getByHome = async (req, res) => {
   try {
@@ -59,8 +59,15 @@ const uploadDataset = async (req, res) => {
     const { home_id, duration } = req.body;
     if (!home_id) return res.status(400).json({ detail: "home_id is required." });
 
-    // Verify the home belongs to this user
-    const home = await findHome(home_id, req.user.id);
+    // Admin can upload to any home; caregivers only their own
+    let home;
+    if (req.user.role === "admin") {
+      const result = await pool.query("SELECT * FROM homes WHERE id = $1", [home_id]);
+      home = result.rows[0] || null;
+    } else {
+      home = await findHome(home_id, req.user.id);
+    }
+
     if (!home) return res.status(404).json({ detail: "Home not found." });
 
     const dataset = await createDataset(
@@ -96,7 +103,6 @@ const remove = async (req, res) => {
     const dataset = await deleteDataset(req.params.id, req.user.id);
     if (!dataset) return res.status(404).json({ detail: "Dataset not found." });
 
-    // Delete the actual file from disk
     if (fs.existsSync(dataset.file_path)) {
       fs.unlinkSync(dataset.file_path);
     }

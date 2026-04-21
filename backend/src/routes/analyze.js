@@ -55,7 +55,7 @@ const resolveDataset = async (req, res, next) => {
     if (!rows.length) return res.status(404).json({ detail: "Dataset not found." });
 
     const dataset = rows[0];
-    if (dataset.user_id !== req.user.id)
+    if (dataset.user_id !== req.user.id && req.user.role !== 'admin')
       return res.status(403).json({ detail: "Not authorised to analyse this dataset." });
 
     req.dataset         = dataset;
@@ -140,15 +140,17 @@ const runAnalysis = (req, res) => {
       if (result.error) return res.status(400).json({ detail: result.error });
 
       // ── Save to DB (non-fatal) ─────────────────────────────
+      let savedResultId = null;
       try {
         const anomaly_rate = result.total_days > 0
           ? ((result.total_anomalies / result.total_days) * 100).toFixed(2)
           : 0;
-        await db.query(
+        const { rows: resRows } = await db.query(
           `INSERT INTO analysis_results
              (dataset_id, home_id, user_id, pipeline,
               total_days, total_anomalies, anomaly_rate, threshold, type_counts, anomalies)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+           RETURNING id`,
           [
             dataset.id, dataset.home_id, req.user.id, "REFIT",
             result.total_days, result.total_anomalies, anomaly_rate,
@@ -157,9 +159,47 @@ const runAnalysis = (req, res) => {
             JSON.stringify(result.anomalies),
           ]
         );
+        savedResultId = resRows[0]?.id;
         console.log("[analyze] Result saved to DB");
       } catch (dbErr) {
         console.error("[analyze] DB save (non-fatal):", dbErr.message);
+      }
+
+      // ── Create alert when anomalies found (non-fatal) ──────
+      if (result.total_anomalies > 0) {
+        try {
+          const { rows: homeRows } = await db.query(
+            `SELECT h.name, d.file_name
+             FROM datasets d
+             JOIN homes h ON h.id = d.home_id
+             WHERE d.id = $1`,
+            [dataset.id]
+          );
+          const homeName = homeRows[0]?.name      || "Unknown Home";
+          const fileName = homeRows[0]?.file_name || "—";
+
+          await db.query(
+            `INSERT INTO alerts
+             (user_id, home_id, analysis_result_id, home_name, file_name, pipeline,
+              anomaly_count, total_days, type_counts, anomalies)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+            [
+              req.user.id,
+              dataset.home_id,
+              savedResultId,
+              homeName,
+              fileName,
+              "REFIT",
+              result.total_anomalies,
+              result.total_days,
+              JSON.stringify(result.type_counts || {}),
+              JSON.stringify(result.anomalies || []),
+            ]
+          );
+          console.log(`[analyze] Alert created — ${result.total_anomalies} anomalies`);
+        } catch (alertErr) {
+          console.error("[analyze] Alert creation failed (non-fatal):", alertErr.message);
+        }
       }
 
       console.log(`[analyze] Done — ${result.total_days} days, ${result.total_anomalies} anomalies`);
@@ -173,7 +213,6 @@ const runAnalysis = (req, res) => {
       });
     }
   });
-
   py.on("error", (err) => {
     console.error("[analyze] Cannot spawn Python:", err.message);
     return res.status(500).json({
@@ -182,7 +221,92 @@ const runAnalysis = (req, res) => {
   });
 };
 
-// ── Routes ────────────────────────────────────────────────────────────────────
-router.post("/:datasetId", protect, resolveDataset, runAnalysis);
+// ── GET /analyze/results ─────────────────────────────────────────────────────
+const getResults = async (req, res) => {
+  try {
+    // If admin, show all. If doctor, show patients. If caregiver, show own.
+    let query = `
+      SELECT ar.*, d.file_name, h.name AS home_name
+      FROM analysis_results ar
+      JOIN datasets d ON d.id = ar.dataset_id
+      JOIN homes    h ON h.id = d.home_id
+    `;
+    let params = [];
 
+    if (req.user.role === 'admin') {
+      query += ` ORDER BY ar.analyzed_at DESC`;
+    } else if (req.user.role === 'doctor') {
+      query += ` WHERE h.doctor_id = $1 ORDER BY ar.analyzed_at DESC`;
+      params = [req.user.id];
+    } else {
+      query += ` WHERE ar.user_id = $1 ORDER BY ar.analyzed_at DESC`;
+      params = [req.user.id];
+    }
+
+    const { rows } = await db.query(query, params);
+    return res.json(rows);
+  } catch (err) {
+    console.error("[analyze] getResults:", err.message);
+    return res.status(500).json({ detail: "Failed to fetch results." });
+  }
+};
+
+// ── GET /analyze/doctor/overview ──────────────────────────────────────────────
+const getDoctorOverview = async (req, res) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT ar.*, d.file_name, h.name AS home_name, u.name AS caregiver_name
+       FROM analysis_results ar
+       JOIN datasets d ON d.id = ar.dataset_id
+       JOIN homes    h ON h.id = d.home_id
+       JOIN users    u ON u.id = ar.user_id
+       ORDER BY ar.analyzed_at DESC`
+    );
+    return res.json(rows);
+  } catch (err) {
+    console.error("[analyze] getDoctorOverview:", err.message);
+    return res.status(500).json({ detail: "Failed to fetch doctor overview." });
+  }
+};
+
+// ── Routes ────────────────────────────────────────────────────────────────────
+//router.get("/results",         protect, getResults);
+//router.get("/doctor/overview", protect, getDoctorOverview);
+//router.post("/:datasetId",     protect, resolveDataset, runAnalysis);
+// Add these GET routes BEFORE the POST /:datasetId route
+router.get("/results", protect, async (req, res) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT ar.*, d.file_name, h.name AS home_name
+       FROM analysis_results ar
+       JOIN datasets d ON d.id = ar.dataset_id
+       JOIN homes    h ON h.id = d.home_id
+       ORDER BY ar.analyzed_at DESC`
+    );
+    return res.json(rows);
+  } catch (err) {
+    return res.status(500).json({ detail: "Failed to fetch results." });
+  }
+});
+
+router.get("/doctor/overview", protect, async (req, res) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT ar.*, d.file_name, h.name AS home_name, u.name AS caregiver_name
+       FROM analysis_results ar
+       JOIN datasets d ON d.id = ar.dataset_id
+       JOIN homes    h ON h.id = d.home_id
+       JOIN users    u ON u.id = ar.user_id
+       ORDER BY ar.analyzed_at DESC`
+    );
+    return res.json(rows);
+  } catch (err) {
+    return res.status(500).json({ detail: "Failed to fetch doctor overview." });
+  }
+});
+
+// POST must come LAST
+router.post("/:datasetId", protect, resolveDataset, runAnalysis);
+router.get("/doctor/overview", protect, getDoctorOverview);
+router.get("/results",         protect, getResults);
 module.exports = router;

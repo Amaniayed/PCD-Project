@@ -23,50 +23,40 @@ async function createTable() {
 }
 
 // ── Create one alert (called after analysis saves result) ─
-async function create({
-  user_id,
-  home_id,
-  analysis_result_id,
-  home_name,
-  file_name,
-  pipeline,
-  anomaly_count,
-  total_days,
-  type_counts,
-  anomalies,
-}) {
+const create = async (data) => {
   const { rows } = await pool.query(
     `INSERT INTO alerts
-       (user_id, home_id, analysis_result_id, home_name, file_name,
-        pipeline, anomaly_count, total_days, type_counts, anomalies)
+     (user_id, home_id, analysis_result_id, home_name, file_name, pipeline,
+      anomaly_count, total_days, type_counts, anomalies)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
      RETURNING *`,
     [
-      user_id,
-      home_id,
-      analysis_result_id,
-      home_name,
-      file_name,
-      pipeline,
-      anomaly_count,
-      total_days,
-      JSON.stringify(type_counts),
-      JSON.stringify(anomalies),
+      data.user_id,
+      data.home_id,
+      data.analysis_result_id,
+      data.home_name,
+      data.file_name,
+      data.pipeline,
+      data.anomaly_count,
+      data.total_days,
+      JSON.stringify(data.type_counts),
+      JSON.stringify(data.anomalies),
     ]
   );
   return rows[0];
-}
+};
 
 // ── Get all alerts for a user (newest first) ──────────────
-async function findByUser(user_id) {
+const findByUser = async (userId) => {
   const { rows } = await pool.query(
-    `SELECT * FROM alerts
+    `SELECT *
+     FROM alerts
      WHERE user_id = $1
      ORDER BY created_at DESC`,
-    [user_id]
+    [userId]
   );
   return rows;
-}
+};
 
 // ── Mark one alert as read ────────────────────────────────
 async function markRead(id, user_id) {

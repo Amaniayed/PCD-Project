@@ -2,27 +2,47 @@ import { useEffect, useState } from "react";
 import { authService } from "../services/api";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:8000";
-const h = () => ({ Authorization: `Bearer ${authService.getToken()}` });
+const h  = () => ({ Authorization: `Bearer ${authService.getToken()}` });
+const hj = () => ({ ...h(), "Content-Type": "application/json" });
 
-// ── constants ──────────────────────────────────────────────
+// ── Friendly caregiver-facing language ────────────────────
 const TYPE_META = {
   "Temporal Shift": {
-    icon: "⏱", color: "#6366f1", bg: "#eef2ff", border: "#c7d2fe",
-    desc: "Activity occurred at an unusual time of day",
+    icon: "🕐", color: "#6366f1", bg: "#eef2ff", border: "#c7d2fe",
+    friendly: "Routine timing change",
+    desc: "Your resident did their usual activities at a different time than normal",
+    action: "Check in with your resident — ask if they slept or ate at different times",
   },
-  Duration: {
-    icon: "📏", color: "#f59e0b", bg: "#fffbeb", border: "#fde68a",
-    desc: "Activity lasted significantly longer or shorter than usual",
+  "Duration": {
+    icon: "⏳", color: "#f59e0b", bg: "#fffbeb", border: "#fde68a",
+    friendly: "Activity duration change",
+    desc: "An activity lasted much longer or shorter than usual",
+    action: "Monitor over the next few days and contact the doctor if this continues",
   },
-  Order: {
-    icon: "🔀", color: "#10b981", bg: "#ecfdf5", border: "#a7f3d0",
-    desc: "Sequence of daily activities was disrupted",
+  "Order": {
+    icon: "🔄", color: "#10b981", bg: "#ecfdf5", border: "#a7f3d0",
+    friendly: "Daily routine reordered",
+    desc: "The usual order of daily activities was changed",
+    action: "Consider scheduling a doctor review if this happens repeatedly",
   },
 };
-const fallback = { icon: "⚠️", color: "#ef4444", bg: "#fef2f2", border: "#fecaca", desc: "Unclassified anomaly" };
-function typeMeta(type) { return TYPE_META[type] || fallback; }
+const fallback = {
+  icon: "⚠️", color: "#ef4444", bg: "#fef2f2", border: "#fecaca",
+  friendly: "Unusual activity",
+  desc: "An unexpected change in the daily routine was detected",
+  action: "Continue monitoring and contact the doctor if concerned",
+};
+const tm = (type) => TYPE_META[type] || fallback;
 
-// ── mini donut chart ───────────────────────────────────────
+// ── Severity level based on anomaly rate ──────────────────
+function severity(count, total) {
+  const pct = total > 0 ? (count / total) * 100 : 0;
+  if (pct >= 30) return { label: "High concern",   color: "#ef4444", bg: "#fef2f2", border: "#fecaca" };
+  if (pct >= 10) return { label: "Worth watching", color: "#f59e0b", bg: "#fffbeb", border: "#fde68a" };
+  return           { label: "Minor variation",  color: "#10b981", bg: "#ecfdf5", border: "#a7f3d0" };
+}
+
+// ── Donut (caregiver-friendly colors) ─────────────────────
 function DonutChart({ typeCounts }) {
   const entries = Object.entries(typeCounts || {});
   const total   = entries.reduce((s, [, v]) => s + v, 0);
@@ -35,14 +55,14 @@ function DonutChart({ typeCounts }) {
     return { type, dash, gap, offset: o };
   });
   return (
-    <svg width={72} height={72} viewBox={`0 0 ${C * 2} ${C * 2}`} style={{ flexShrink: 0 }}>
+    <svg width={72} height={72} viewBox={`0 0 ${C*2} ${C*2}`} style={{ flexShrink: 0 }}>
       {slices.map(({ type, dash, gap, offset: off }) => (
         <circle key={type} cx={C} cy={C} r={R} fill="none"
-          stroke={typeMeta(type).color} strokeWidth={stroke}
+          stroke={tm(type).color} strokeWidth={stroke}
           strokeDasharray={`${dash} ${gap}`}
           strokeDashoffset={-off + circ * 0.25} strokeLinecap="round" />
       ))}
-      <text x={C} y={C + 1} textAnchor="middle" dominantBaseline="central"
+      <text x={C} y={C+1} textAnchor="middle" dominantBaseline="central"
         style={{ fontSize: 13, fontWeight: 700, fill: "#1e1f2e", fontFamily: "DM Sans, sans-serif" }}>
         {total}
       </text>
@@ -50,93 +70,69 @@ function DonutChart({ typeCounts }) {
   );
 }
 
-function RateBar({ count, total }) {
-  const pct   = total > 0 ? Math.round((count / total) * 100) : 0;
-  const color = pct >= 40 ? "#ef4444" : pct >= 20 ? "#f59e0b" : "#6366f1";
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-      <div style={{ flex: 1, height: 6, background: "#f0f1f6", borderRadius: 99, overflow: "hidden" }}>
-        <div style={{ width: `${pct}%`, height: "100%", background: color, borderRadius: 99, transition: "width 0.6s ease" }} />
-      </div>
-      <span style={{ fontSize: 12, fontWeight: 700, color, minWidth: 36 }}>{pct}%</span>
-    </div>
-  );
-}
-
-function AnomalyRow({ anomaly, idx }) {
-  const m   = typeMeta(anomaly.anomaly_type);
-  const err = typeof anomaly.reconstruction_error === "number"
-    ? anomaly.reconstruction_error.toFixed(5) : "—";
-  return (
-    <div style={{
-      display: "grid", gridTemplateColumns: "32px 100px 1fr 110px",
-      alignItems: "center", gap: 12, padding: "10px 14px",
-      borderRadius: 10, background: idx % 2 === 0 ? "#fafafa" : "#fff",
-      borderLeft: `3px solid ${m.color}`, fontSize: 13,
-    }}>
-      <span style={{ color: "#b0b5c4", fontFamily: "monospace", fontSize: 11 }}>#{anomaly.day_index ?? idx}</span>
-      <span style={{ color: "#374151", fontWeight: 500 }}>{anomaly.date || "—"}</span>
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ background: m.bg, color: m.color, border: `1px solid ${m.border}`, borderRadius: 20, padding: "2px 10px", fontSize: 12, fontWeight: 600, whiteSpace: "nowrap" }}>
-          {m.icon} {anomaly.anomaly_type}
-        </span>
-        <span style={{ fontSize: 11, color: "#9196a8" }}>{m.desc}</span>
-      </div>
-      <span style={{ fontFamily: "monospace", fontSize: 11, color: "#9196a8", textAlign: "right" }}>err: {err}</span>
-    </div>
-  );
-}
-
+// ── Detail panel ──────────────────────────────────────────
 function DetailPanel({ alert }) {
   const typeCounts = alert.type_counts || {};
-  const anomalies  = alert.anomalies  || [];
-  const total      = alert.total_days || anomalies.length;
+  const anomalies  = Array.isArray(alert.anomalies) ? alert.anomalies : [];
+  const total      = alert.total_days || 0;
+  const sev        = severity(alert.anomaly_count, total);
   const [filter, setFilter] = useState("all");
-  const filtered = filter === "all" ? anomalies : anomalies.filter((a) => a.anomaly_type === filter);
+  const filtered   = filter === "all" ? anomalies : anomalies.filter(a => a.anomaly_type === filter);
 
   return (
-    <div style={{ borderTop: "1px solid #e8eaf0", background: "#f8f9fc", padding: "20px 24px", display: "flex", flexDirection: "column", gap: 20 }}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+    <div style={{ borderTop: "1px solid #e8eaf0", background: "#f8f9fc", padding: "20px 24px", display: "flex", flexDirection: "column", gap: 18 }}>
+
+      {/* Summary stats — caregiver friendly */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
         {[
-          { label: "Total days",  value: total,               icon: "📅" },
-          { label: "Anomalies",   value: alert.anomaly_count, icon: "⚠️" },
-          { label: "Clean days",  value: Math.max(0, total - alert.anomaly_count), icon: "✅" },
-          { label: "Pipeline",    value: alert.pipeline || "—", icon: "🔬" },
-        ].map(({ label, value, icon }) => (
-          <div key={label} style={{ background: "#fff", border: "1px solid #e8eaf0", borderRadius: 12, padding: "14px 16px" }}>
-            <div style={{ fontSize: 20, marginBottom: 6 }}>{icon}</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#1e1f2e", lineHeight: 1 }}>{value}</div>
-            <div style={{ fontSize: 11, color: "#9196a8", marginTop: 4, textTransform: "uppercase", letterSpacing: "0.5px" }}>{label}</div>
+          { label: "Days monitored",  value: total,                                              icon: "📅", color: "#6366f1" },
+          { label: "Unusual days",    value: alert.anomaly_count,                                icon: "⚠️", color: "#ef4444" },
+          { label: "Normal days",     value: Math.max(0, total - alert.anomaly_count),           icon: "✅", color: "#10b981" },
+        ].map(({ label, value, icon, color }) => (
+          <div key={label} style={{ background: "#fff", border: "1px solid #e8eaf0", borderRadius: 12, padding: "14px 16px", textAlign: "center" }}>
+            <div style={{ fontSize: 22, marginBottom: 6 }}>{icon}</div>
+            <div style={{ fontSize: 24, fontWeight: 700, color, lineHeight: 1 }}>{value}</div>
+            <div style={{ fontSize: 11, color: "#9196a8", marginTop: 5, textTransform: "uppercase", letterSpacing: "0.4px" }}>{label}</div>
           </div>
         ))}
       </div>
 
-      <div style={{ background: "#fff", border: "1px solid #e8eaf0", borderRadius: 12, padding: "16px 20px" }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: "#9196a8", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 10 }}>Anomaly Rate</div>
-        <RateBar count={alert.anomaly_count} total={total} />
+      {/* Severity banner */}
+      <div style={{ background: sev.bg, border: `1px solid ${sev.border}`, borderRadius: 12, padding: "14px 18px", display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ fontSize: 28 }}>{sev.label === "High concern" ? "🚨" : sev.label === "Worth watching" ? "👀" : "ℹ️"}</div>
+        <div>
+          <div style={{ fontWeight: 700, color: sev.color, fontSize: 14 }}>{sev.label}</div>
+          <div style={{ fontSize: 13, color: "#4b5060", marginTop: 2 }}>
+            {Math.round((alert.anomaly_count / (total || 1)) * 100)}% of monitored days showed unusual activity
+          </div>
+        </div>
       </div>
 
+      {/* Type breakdown — friendly names */}
       {Object.keys(typeCounts).length > 0 && (
         <div style={{ background: "#fff", border: "1px solid #e8eaf0", borderRadius: 12, padding: "16px 20px" }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: "#9196a8", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 16 }}>Anomaly Type Breakdown</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 24 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#374151", marginBottom: 14 }}>What was detected</div>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 20 }}>
             <DonutChart typeCounts={typeCounts} />
-            <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 14 }}>
               {Object.entries(typeCounts).map(([type, count]) => {
-                const m   = typeMeta(type);
+                const m   = tm(type);
                 const pct = alert.anomaly_count > 0 ? Math.round((count / alert.anomaly_count) * 100) : 0;
                 return (
                   <div key={type}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: "#1e1f2e", display: "flex", alignItems: "center", gap: 6 }}>
-                        <span style={{ fontSize: 14 }}>{m.icon}</span> {type}
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: "#1e1f2e", display: "flex", alignItems: "center", gap: 7 }}>
+                        <span style={{ background: m.bg, border: `1px solid ${m.border}`, borderRadius: 6, padding: "2px 8px", color: m.color, fontSize: 12 }}>
+                          {m.icon} {m.friendly}
+                        </span>
                       </span>
-                      <span style={{ fontSize: 12, color: "#9196a8" }}>{count} day{count !== 1 ? "s" : ""} · {pct}%</span>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: m.color }}>{count} day{count !== 1 ? "s" : ""}</span>
                     </div>
-                    <div style={{ height: 6, background: "#f0f1f6", borderRadius: 99, overflow: "hidden" }}>
+                    <div style={{ height: 6, background: "#f0f1f6", borderRadius: 99, overflow: "hidden", marginBottom: 5 }}>
                       <div style={{ width: `${pct}%`, height: "100%", background: m.color, borderRadius: 99, transition: "width 0.5s ease" }} />
                     </div>
-                    <div style={{ fontSize: 11, color: "#9196a8", marginTop: 3 }}>{m.desc}</div>
+                    <div style={{ fontSize: 12, color: "#6b7280" }}>{m.desc}</div>
+                    <div style={{ fontSize: 12, color: m.color, fontWeight: 500, marginTop: 3 }}>💡 {m.action}</div>
                   </div>
                 );
               })}
@@ -145,30 +141,49 @@ function DetailPanel({ alert }) {
         </div>
       )}
 
+      {/* Anomaly log — simplified, no reconstruction error */}
       {anomalies.length > 0 && (
         <div style={{ background: "#fff", border: "1px solid #e8eaf0", borderRadius: 12, padding: "16px 20px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: "#9196a8", textTransform: "uppercase", letterSpacing: "0.5px" }}>
-              Anomaly Log — {filtered.length} record{filtered.length !== 1 ? "s" : ""}
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#374151" }}>
+              Unusual days — {filtered.length} record{filtered.length !== 1 ? "s" : ""}
             </div>
             <div style={{ display: "flex", gap: 6 }}>
               {["all", ...Object.keys(typeCounts)].map((f) => (
                 <button key={f} onClick={() => setFilter(f)} style={{
                   background: filter === f ? "#6366f1" : "#f0f1f8",
-                  color: filter === f ? "#fff" : "#6366f1",
+                  color:      filter === f ? "#fff"     : "#6366f1",
                   border: "none", borderRadius: 20, padding: "4px 12px",
-                  fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", textTransform: "capitalize",
+                  fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
                 }}>
-                  {f === "all" ? `All (${anomalies.length})` : `${typeMeta(f).icon} ${f}`}
+                  {f === "all" ? `All (${anomalies.length})` : `${tm(f).icon} ${tm(f).friendly}`}
                 </button>
               ))}
             </div>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 320, overflowY: "auto" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "32px 100px 1fr 110px", gap: 12, padding: "6px 14px", fontSize: 10, fontWeight: 700, color: "#b0b5c4", textTransform: "uppercase", letterSpacing: "0.5px" }}>
-              <span>#</span><span>Date</span><span>Type</span><span style={{ textAlign: "right" }}>Error</span>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 300, overflowY: "auto" }}>
+            {/* Header */}
+            <div style={{ display: "grid", gridTemplateColumns: "90px 1fr 1fr", gap: 12, padding: "6px 14px", fontSize: 10, fontWeight: 700, color: "#b0b5c4", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+              <span>Date</span><span>Type of change</span><span>Description</span>
             </div>
-            {filtered.map((anomaly, i) => <AnomalyRow key={i} anomaly={anomaly} idx={i} />)}
+            {filtered.map((a, i) => {
+              const m = tm(a.anomaly_type);
+              return (
+                <div key={i} style={{
+                  display: "grid", gridTemplateColumns: "90px 1fr 1fr",
+                  alignItems: "center", gap: 12, padding: "10px 14px",
+                  borderRadius: 10, background: i % 2 === 0 ? "#fafafa" : "#fff",
+                  borderLeft: `3px solid ${m.color}`,
+                }}>
+                  <span style={{ color: "#374151", fontWeight: 600, fontSize: 13 }}>{a.date || "—"}</span>
+                  <span style={{ background: m.bg, color: m.color, border: `1px solid ${m.border}`, borderRadius: 20, padding: "2px 10px", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", width: "fit-content" }}>
+                    {m.icon} {m.friendly}
+                  </span>
+                  <span style={{ fontSize: 12, color: "#6b7280" }}>{m.desc}</span>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -180,17 +195,35 @@ function DetailPanel({ alert }) {
 // MAIN PAGE
 // ══════════════════════════════════════════════════════════
 export default function Alerts() {
-  const [alerts,   setAlerts]   = useState([]);
-  const [loading,  setLoading]  = useState(true);
-  const [openId,   setOpenId]   = useState(null);
-  // sending state: { [alertId]: "idle" | "sending" | "ok" | "error" }
-  const [sendState, setSendState] = useState({});
+  const [alerts,      setAlerts]      = useState([]);
+  const [loading,     setLoading]     = useState(true);
+  const [refreshing,  setRefreshing]  = useState(false);
+  const [openId,      setOpenId]      = useState(null);
+  const [sendState,   setSendState]   = useState({});
+
+  const fetchAlerts = async (silent = false) => {
+    if (!silent) setLoading(true);
+    else setRefreshing(true);
+    try {
+      const r    = await fetch(`${API}/alerts`, { headers: h() });
+      const data = await r.json();
+      setAlerts(
+        (Array.isArray(data) ? data : []).sort(
+          (a, b) => new Date(b.created_at) - new Date(a.created_at)
+        )
+      );
+    } catch {
+      if (!silent) setAlerts([]);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
 
   useEffect(() => {
-    fetch(`${API}/alerts`, { headers: h() })
-      .then((r) => r.json())
-      .then((data) => setAlerts(Array.isArray(data) ? data : []))
-      .finally(() => setLoading(false));
+    fetchAlerts();
+    const interval = setInterval(() => fetchAlerts(true), 30_000);
+    return () => clearInterval(interval);
   }, []);
 
   const markRead = async (id) => {
@@ -198,31 +231,18 @@ export default function Alerts() {
     setAlerts((prev) => prev.map((a) => (a.id === id ? { ...a, is_read: true } : a)));
   };
 
-  const toggleOpen = (id) => setOpenId((prev) => (prev === id ? null : id));
+  const toggleOpen = (id) => {
+    setOpenId((prev) => (prev === id ? null : id));
+  };
 
-  // ── Send to Doctor ────────────────────────────────────────
   const handleSendToDoctor = async (alertId) => {
     setSendState((s) => ({ ...s, [alertId]: "sending" }));
     try {
-      const res = await fetch(`${API}/alerts/${alertId}/send-to-doctor`, {
-        method:  "POST",
-        headers: { ...h(), "Content-Type": "application/json" },
-      });
-
-      // Always try to parse JSON — backend now guarantees it
-      let data = {};
-      const contentType = res.headers.get("content-type") || "";
-      if (contentType.includes("application/json")) {
-        data = await res.json();
-      } else {
-        // Unexpected HTML response — surface raw text for debugging
-        const raw = await res.text();
-        console.error("[send-to-doctor] Non-JSON response:", raw);
-        data = { detail: `Server error (${res.status}). Check backend logs.` };
-      }
-
+      const res  = await fetch(`${API}/alerts/${alertId}/send-to-doctor`, { method: "POST", headers: hj() });
+      const ct   = res.headers.get("content-type") || "";
+      const data = ct.includes("application/json") ? await res.json() : { detail: `Server error (${res.status})` };
       if (!res.ok) {
-        window.alert(`❌ ${data.detail || "Failed to send email."}`);
+        window.alert(`❌ ${data.detail || "Failed to send."}`);
         setSendState((s) => ({ ...s, [alertId]: "error" }));
       } else {
         window.alert(`✅ ${data.message}`);
@@ -239,6 +259,7 @@ export default function Alerts() {
   return (
     <div style={{ color: "#1e1f2e", fontFamily: "'DM Sans', sans-serif", maxWidth: 900 }}>
 
+      {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 28 }}>
         <div>
           <h1 style={{ fontSize: 26, fontWeight: 700, margin: "0 0 4px", display: "flex", alignItems: "center", gap: 10 }}>
@@ -249,32 +270,45 @@ export default function Alerts() {
               </span>
             )}
           </h1>
-          <p style={{ color: "#9196a8", fontSize: 14, margin: 0 }}>Anomaly alerts generated from your analysis runs</p>
+          <p style={{ color: "#9196a8", fontSize: 14, margin: 0 }}>
+            Unusual activity detected in your monitored homes
+          </p>
         </div>
-        {unread > 0 && (
+        <div style={{ display: "flex", gap: 8 }}>
           <button
-            onClick={async () => { for (const a of alerts.filter((x) => !x.is_read)) await markRead(a.id); }}
-            style={{ background: "#f8f9fc", color: "#4b5060", border: "1px solid #e2e5ef", borderRadius: 10, padding: "9px 16px", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}
+            onClick={() => fetchAlerts(true)}
+            disabled={refreshing}
+            style={{ background: "#f8f9fc", color: "#6366f1", border: "1px solid #c7d2fe", borderRadius: 10, padding: "9px 14px", fontSize: 13, cursor: refreshing ? "not-allowed" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6 }}
           >
-            Mark all as read
+            {refreshing ? "⏳" : "🔄"} Refresh
           </button>
-        )}
+          {unread > 0 && (
+            <button
+              onClick={async () => { for (const a of alerts.filter((x) => !x.is_read)) await markRead(a.id); }}
+              style={{ background: "#f8f9fc", color: "#4b5060", border: "1px solid #e2e5ef", borderRadius: 10, padding: "9px 16px", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}
+            >
+              Mark all as read
+            </button>
+          )}
+        </div>
       </div>
 
       {loading ? (
         <div style={{ color: "#b0b5c4", padding: 48, textAlign: "center" }}>Loading alerts…</div>
       ) : alerts.length === 0 ? (
         <div style={{ textAlign: "center", padding: "80px 20px" }}>
-          <div style={{ fontSize: 44, marginBottom: 14 }}>🔔</div>
-          <p style={{ color: "#9196a8", fontSize: 15 }}>No alerts yet. Run an analysis to start monitoring.</p>
+          <div style={{ fontSize: 44, marginBottom: 14 }}>✅</div>
+          <p style={{ color: "#9196a8", fontSize: 15 }}>No alerts yet — everything looks normal.</p>
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {alerts.map((a) => {
             const isOpen     = openId === a.id;
             const typeCounts = a.type_counts || {};
-            const types      = Object.keys(typeCounts);
             const state      = sendState[a.id] || "idle";
+            const sev        = severity(a.anomaly_count, a.total_days);
+            const date       = new Date(a.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+            const time       = new Date(a.created_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
 
             return (
               <div key={a.id} style={{
@@ -282,68 +316,66 @@ export default function Alerts() {
                 border: `1px solid ${!a.is_read ? "#c7d2fe" : "#e8eaf0"}`,
                 borderRadius: 16, overflow: "hidden",
                 boxShadow: !a.is_read ? "0 0 0 3px rgba(99,102,241,0.08)" : "none",
-                transition: "box-shadow 0.2s",
               }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "18px 22px" }}>
 
+                  {/* Unread dot */}
                   <div style={{
                     width: 9, height: 9, borderRadius: "50%", flexShrink: 0,
                     background: a.is_read ? "#d1d5db" : "#6366f1",
                     boxShadow: a.is_read ? "none" : "0 0 0 3px rgba(99,102,241,0.2)",
                   }} />
 
+                  {/* Main info */}
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
+                    {/* Title row */}
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
                       <span style={{ fontSize: 15, fontWeight: 700, color: a.is_read ? "#374151" : "#1e1f2e" }}>
-                        ⚠️ {a.anomaly_count} anomal{a.anomaly_count === 1 ? "y" : "ies"} detected
+                        {a.anomaly_count} unusual day{a.anomaly_count !== 1 ? "s" : ""} detected
                       </span>
-                      {types.map((type) => {
-                        const m = typeMeta(type);
+                      {/* Severity badge */}
+                      <span style={{ background: sev.bg, color: sev.color, border: `1px solid ${sev.border}`, borderRadius: 20, padding: "2px 10px", fontSize: 11, fontWeight: 700 }}>
+                        {sev.label === "High concern" ? "🚨" : sev.label === "Worth watching" ? "👀" : "ℹ️"} {sev.label}
+                      </span>
+                      {/* Friendly type pills */}
+                      {Object.entries(typeCounts).map(([type, count]) => {
+                        const m = tm(type);
                         return (
                           <span key={type} style={{ background: m.bg, color: m.color, border: `1px solid ${m.border}`, borderRadius: 20, padding: "2px 10px", fontSize: 11, fontWeight: 600 }}>
-                            {m.icon} {type} ({typeCounts[type]})
+                            {m.icon} {m.friendly} ({count})
                           </span>
                         );
                       })}
                     </div>
-                    <div style={{ fontSize: 13, color: "#6b7280", display: "flex", gap: 14, flexWrap: "wrap" }}>
+
+                    {/* Meta row — caregiver friendly, NO pipeline */}
+                    <div style={{ fontSize: 13, color: "#6b7280", display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
                       <span>🏠 {a.home_name}</span>
-                      <span>📄 {a.file_name}</span>
-                      <span>🔬 {a.pipeline}</span>
-                      {a.total_days && <span>📅 {a.total_days} days</span>}
-                      <span>🕐 {new Date(a.created_at).toLocaleString()}</span>
+                      <span>📅 {a.total_days} days monitored</span>
+                      <span style={{ color: "#9196a8" }}>🕐 {date} at {time}</span>
                     </div>
                   </div>
 
+                  {/* Actions */}
                   <div style={{ display: "flex", gap: 8, flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end" }}>
-
-                    {/* ── Send to Doctor button ── */}
                     <button
                       onClick={() => handleSendToDoctor(a.id)}
                       disabled={state === "sending"}
                       style={{
-                        background: state === "ok"      ? "#10b981"
-                                  : state === "error"   ? "#ef4444"
-                                  : state === "sending" ? "rgba(99,102,241,0.5)"
-                                  : "#6366f1",
+                        background: state === "ok" ? "#10b981" : state === "error" ? "#ef4444" : state === "sending" ? "rgba(99,102,241,0.5)" : "#6366f1",
                         color: "#fff", border: "none", borderRadius: 9,
-                        padding: "8px 14px", fontSize: 13, fontWeight: 600,
+                        padding: "8px 16px", fontSize: 13, fontWeight: 600,
                         cursor: state === "sending" ? "not-allowed" : "pointer",
-                        fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6,
-                        transition: "background 0.2s",
+                        fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6, transition: "background 0.2s",
                       }}
                     >
-                      {state === "sending" ? "⏳ Sending…"
-                       : state === "ok"    ? "✅ Sent!"
-                       : state === "error" ? "❌ Retry"
-                       : "📩 Send to Doctor"}
+                      {state === "sending" ? "⏳ Sending…" : state === "ok" ? "✅ Sent!" : state === "error" ? "❌ Retry" : "📩 Notify Doctor"}
                     </button>
 
                     <button
                       onClick={() => { toggleOpen(a.id); if (!a.is_read) markRead(a.id); }}
                       style={{
-                        background: isOpen ? "#6366f1" : "#eef2ff",
-                        color: isOpen ? "#fff" : "#6366f1",
+                        background: isOpen ? "#6366f1" : "#eef2ff", color: isOpen ? "#fff" : "#6366f1",
                         border: "none", borderRadius: 9, padding: "8px 14px",
                         fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
                       }}
@@ -356,7 +388,7 @@ export default function Alerts() {
                         onClick={() => markRead(a.id)}
                         style={{ background: "#f8f9fc", color: "#6b7280", border: "1px solid #e2e5ef", borderRadius: 9, padding: "8px 12px", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}
                       >
-                        ✓ Mark read
+                        ✓ Read
                       </button>
                     )}
                   </div>

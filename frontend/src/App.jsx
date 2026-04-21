@@ -7,56 +7,92 @@ import {
   useLocation,
 } from "react-router-dom";
 import { authService } from "./services/api";
-import Login           from "./pages/Login";
-import Signup          from "./pages/Signup";
-import Dashboard       from "./components/Dashboard";
-import Data            from "./pages/Data";
-import Analysis        from "./pages/Analysis";
-import MessageDoctor   from "./pages/MessageDoctor";
-import DoctorDashboard from "./pages/DoctorDashboard";
-import Alerts          from "./pages/Alerts";
-import DoctorOverview  from "./pages/DoctorOverview";
 
-// ─── Auth Guard ───────────────────────────────────────────────────────────────
-function RequireAuth({ children }) {
-  return authService.isAuthenticated()
-    ? children
-    : <Navigate to="/login" replace />;
-}
+// ── Public pages ──────────────────────────────────────────
+import Login  from "./pages/Login";
+import Signup from "./pages/Signup";
 
-// ─── Role Guard ───────────────────────────────────────────────────────────────
-function RequireRole({ role, children }) {
-  const user = authService.getUser?.() || null;
+// ── Caregiver pages ───────────────────────────────────────
+import CaregiverDashboard from "./components/Dashboard";
+import Alerts             from "./pages/Alerts";
+import Messages           from "./pages/MessageDoctor";
+import Activity           from "./pages/Analysis";
+import Report from "./pages/Report";
+
+// ── Doctor pages ──────────────────────────────────────────
+import DoctorOverview   from "./pages/DoctorOverview";    // stats overview  → /doctor/dashboard
+import DoctorReview     from "./pages/DoctorDashboard";   // anomaly review  → /doctor/review
+import DoctorMessages   from "./pages/DoctorDashboard";   // reuse same component with prop or make separate
+
+// ── Admin pages ───────────────────────────────────────────
+import AdminDashboard from "./pages/AdminDashboard";
+import AdminDatasets  from "./pages/AdminDatasets";
+import AdminAnalysis  from "./pages/AdminAnalysis";
+import AdminUsers     from "./pages/AdminUsers";
+import AdminHomes     from "./pages/AdminHomes";
+
+// ─── Route Guards ─────────────────────────────────────────
+function RequireCaregiver({ children }) {
   if (!authService.isAuthenticated()) return <Navigate to="/login" replace />;
-  if (user?.role !== role) {
-    return user?.role === "doctor"
-      ? <Navigate to="/doctor/overview" replace />
-      : <Navigate to="/dashboard" replace />;
-  }
+  const role = authService.getRole();
+  if (role === "doctor") return <Navigate to="/doctor/dashboard" replace />;
+  if (role === "admin")  return <Navigate to="/admin/dashboard"  replace />;
   return children;
 }
 
-// ─── Nav items per role ───────────────────────────────────────────────────────
+function RequireDoctor({ children }) {
+  if (!authService.isAuthenticated()) return <Navigate to="/login" replace />;
+  const role = authService.getRole();
+  if (role !== "doctor") return <Navigate to="/dashboard" replace />;
+  return children;
+}
+
+function RequireAdmin({ children }) {
+  if (!authService.isAuthenticated()) return <Navigate to="/login" replace />;
+  const role = authService.getRole();
+  if (role !== "admin") return <Navigate to="/dashboard" replace />;
+  return children;
+}
+
+// ─── Nav definitions ─────────────────────────────────────
 const NAV_CAREGIVER = [
   { to: "/dashboard", icon: "◈",  label: "Dashboard"      },
-  { to: "/data",      icon: "⊞",  label: "Data"           },
-  { to: "/analysis",  icon: "⌬",  label: "Analysis"       },
   { to: "/alerts",    icon: "🔔", label: "Alerts"         },
   { to: "/messages",  icon: "📩", label: "Message Doctor" },
+  { to: "/activity",  icon: "📊", label: "Daily Activity" },
 ];
 
 const NAV_DOCTOR = [
-  { to: "/doctor/overview",  icon: "📊", label: "Overview"     },
-  { to: "/doctor/dashboard", icon: "🩺", label: "Medical View" },
+  { to: "/doctor/dashboard", icon: "◈",  label: "Dashboard"       },
+  /*{ to: "/doctor/review",    icon: "🔍", label: "Review Anomalies" },}*/
+  { to: "/doctor/messages",  icon: "📩", label: "Messages"         },
 ];
 
-// ─── Sidebar ──────────────────────────────────────────────────────────────────
+const NAV_ADMIN = [
+  { to: "/admin/dashboard", icon: "◈",  label: "Dashboard" },
+  { to: "/admin/homes",     icon: "🏠", label: "Homes"     },
+  { to: "/admin/datasets",  icon: "📂", label: "Datasets"  },
+  { to: "/admin/analysis",  icon: "⚡", label: "Analysis"  },
+  { to: "/admin/users",     icon: "👥", label: "Users"     },
+];
+
+// ─── Sidebar ─────────────────────────────────────────────
 function Sidebar() {
   const loc  = useLocation();
-  const user = authService.getUser?.() || null;
+  const user = authService.getUser();
   const role = user?.role || "caregiver";
 
-  const navItems = role === "doctor" ? NAV_DOCTOR : NAV_CAREGIVER;
+  const navItems =
+    role === "admin"  ? NAV_ADMIN :
+    role === "doctor" ? NAV_DOCTOR :
+    NAV_CAREGIVER;
+
+  const badgeConfig = {
+    admin:     { bg: "#faf5ff", border: "#ddd6fe", color: "#7c3aed", icon: "🔑",  label: "Admin"     },
+    doctor:    { bg: "#f0fdf4", border: "#bbf7d0", color: "#16a34a", icon: "🧑‍⚕️", label: "Doctor"    },
+    caregiver: { bg: "#e0f2fe", border: "#7dd3fc", color: "#0284c7", icon: "👩‍⚕️", label: "Caregiver" },
+  };
+  const badge = badgeConfig[role] || badgeConfig.caregiver;
 
   const handleLogout = () => {
     authService.logout();
@@ -64,119 +100,103 @@ function Sidebar() {
   };
 
   return (
-    <nav className="sidebar">
+    <nav style={{
+      width: 240, background: "#fff", borderRight: "1px solid #e8eaf0",
+      display: "flex", flexDirection: "column", padding: "24px 16px",
+      fontFamily: "'DM Sans', sans-serif", gap: 4, flexShrink: 0,
+    }}>
       {/* Logo */}
-      <div className="sidebar-logo">
-        <span>⬡</span>
+      <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 16 }}>
+        <span style={{ fontSize: 24, color: "#6366f1" }}>⬡</span>
         <div>
-          <div className="logo-title">ElderGuard</div>
-          <div className="logo-sub">Monitoring System</div>
+          <div style={{ fontWeight: 700, fontSize: 15, color: "#1e1f2e" }}>ElderGuard</div>
+          <div style={{ fontSize: 11, color: "#9aa0b4" }}>Monitoring System</div>
         </div>
       </div>
 
       {/* Role badge */}
-      <div className={`sidebar-role-badge sidebar-role-badge--${role}`}>
-        <span className="srb-emoji">{role === "doctor" ? "🧑‍⚕️" : "👩‍⚕️"}</span>
+      <div style={{
+        display: "flex", alignItems: "center", gap: 10,
+        padding: "10px 12px", borderRadius: 10,
+        border: `1.5px solid ${badge.border}`, background: badge.bg, marginBottom: 16,
+      }}>
+        <span style={{ fontSize: 22 }}>{badge.icon}</span>
         <div>
-          <div className="srb-role">{role === "doctor" ? "Doctor" : "Caregiver"}</div>
-          <div className="srb-name">{user?.name || "—"}</div>
+          <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.5px", textTransform: "uppercase", color: badge.color }}>
+            {badge.label}
+          </div>
+          <div style={{ fontSize: 13, color: "#475569", fontWeight: 500, marginTop: 1 }}>
+            {user?.name || "—"}
+          </div>
         </div>
       </div>
 
-      {/* Nav links */}
-      <div className="sidebar-links">
-        <div className="section-title">Navigation</div>
-        {navItems.map((n) => (
-          <Link
-            key={n.label}
-            to={n.to}
-            className={`nav-link ${loc.pathname === n.to ? "active" : ""}`}
-          >
-            <span className="nav-icon">{n.icon}</span>
-            <span>{n.label}</span>
-          </Link>
-        ))}
+      <div style={{ fontSize: 11, color: "#9aa0b4", marginBottom: 8, paddingLeft: 10, textTransform: "uppercase", letterSpacing: "0.5px" }}>
+        Navigation
       </div>
 
-      <button className="sidebar-logout" onClick={handleLogout}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        {navItems.map((n) => {
+          const active = loc.pathname === n.to;
+          return (
+            <Link key={n.to} to={n.to} style={{
+              display: "flex", alignItems: "center", gap: 12,
+              padding: "10px 12px", borderRadius: 10,
+              color: active ? "#6366f1" : "#9196a8",
+              background: active ? "rgba(99,102,241,0.1)" : "transparent",
+              fontWeight: active ? 600 : 400,
+              textDecoration: "none", fontSize: 14, transition: "all 0.15s",
+            }}>
+              <span style={{ fontSize: 14 }}>{n.icon}</span>
+              <span>{n.label}</span>
+            </Link>
+          );
+        })}
+      </div>
+
+      {role === "admin" && (
+        <div style={{ marginTop: 12, background: "#faf5ff", border: "1px solid #ddd6fe", borderRadius: 10, padding: "10px 12px" }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#7c3aed", marginBottom: 4 }}>Admin Mode</div>
+          <div style={{ fontSize: 11, color: "#9196a8", lineHeight: 1.5 }}>Full access to datasets, analysis, and users.</div>
+        </div>
+      )}
+
+      <button
+        onClick={handleLogout}
+        style={{ marginTop: "auto", border: "none", background: "#f8f9fc", padding: "10px", borderRadius: 10, cursor: "pointer", color: "#b0b5c4", fontFamily: "inherit", fontSize: 13, transition: "all 0.15s" }}
+        onMouseEnter={(e) => { e.currentTarget.style.background = "#fef2f2"; e.currentTarget.style.color = "#ef4444"; }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = "#f8f9fc"; e.currentTarget.style.color = "#b0b5c4"; }}
+      >
         ⏻ Logout
       </button>
-
-      <style>{`
-        .sidebar {
-          width: 240px;
-          background: #fff;
-          border-right: 1px solid #e8eaf0;
-          display: flex;
-          flex-direction: column;
-          padding: 24px 16px;
-          font-family: 'DM Sans', sans-serif;
-          gap: 4px;
-        }
-        .sidebar-logo {
-          display: flex; gap: 12px; align-items: center; margin-bottom: 16px;
-        }
-        .sidebar-logo span { font-size: 24px; color: #6366f1; }
-        .logo-title { font-weight: 700; font-size: 15px; }
-        .logo-sub   { font-size: 11px; color: #9aa0b4; }
-
-        .sidebar-role-badge {
-          display: flex; align-items: center; gap: 10px;
-          padding: 10px 12px; border-radius: 10px;
-          border: 1.5px solid; margin-bottom: 16px;
-        }
-        .sidebar-role-badge--caregiver { background:#e0f2fe; border-color:#7dd3fc; }
-        .sidebar-role-badge--doctor    { background:#f3e8ff; border-color:#c4b5fd; }
-        .srb-emoji { font-size: 22px; }
-        .srb-role  {
-          font-size: 11px; font-weight: 700;
-          letter-spacing: 0.5px; text-transform: uppercase;
-        }
-        .sidebar-role-badge--caregiver .srb-role { color: #0284c7; }
-        .sidebar-role-badge--doctor    .srb-role { color: #7c3aed; }
-        .srb-name  { font-size: 13px; color: #475569; font-weight: 500; margin-top: 1px; }
-
-        .section-title {
-          font-size: 11px; color: #9aa0b4; margin-bottom: 8px;
-          padding-left: 10px; text-transform: uppercase; letter-spacing: 0.5px;
-        }
-        .nav-link {
-          display: flex; align-items: center; gap: 12px;
-          padding: 10px 12px; border-radius: 10px;
-          color: #9196a8; text-decoration: none;
-          font-size: 14px; transition: 0.15s;
-        }
-        .nav-link:hover  { background: #f4f6fb; color: #4b5060; }
-        .nav-link.active { background: rgba(99,102,241,0.1); color: #6366f1; font-weight: 600; }
-        .nav-icon { font-size: 13px; }
-
-        .sidebar-logout {
-          margin-top: auto; border: none; background: #f8f9fc;
-          padding: 10px; border-radius: 10px; cursor: pointer;
-          color: #b0b5c4; font-family: inherit; font-size: 13px; transition: 0.15s;
-        }
-        .sidebar-logout:hover { background: #fef2f2; color: #ef4444; }
-      `}</style>
     </nav>
   );
 }
 
-// ─── App Shell ────────────────────────────────────────────────────────────────
+// ─── App Shell — key forces unmount on every route change ─
 function AppShell({ children }) {
+  const { pathname } = useLocation();
   return (
     <div style={{ display: "flex", minHeight: "100vh", background: "#f4f6fb" }}>
       <Sidebar />
-      <main style={{ flex: 1, padding: "32px", overflowY: "auto" }}>
+      <main key={pathname} style={{ flex: 1, padding: "32px", overflowY: "auto" }}>
         {children}
       </main>
     </div>
   );
 }
 
-// ─── Routes ───────────────────────────────────────────────────────────────────
-export default function App() {
-  const user = authService.getUser?.() || null;
+// ─── Smart redirect ───────────────────────────────────────
+function SmartRedirect() {
+  if (!authService.isAuthenticated()) return <Navigate to="/login" replace />;
+  const role = authService.getRole();
+  if (role === "admin")  return <Navigate to="/admin/dashboard"  replace />;
+  if (role === "doctor") return <Navigate to="/doctor/dashboard" replace />;
+  return <Navigate to="/dashboard" replace />;
+}
 
+// ─── Routes ───────────────────────────────────────────────
+export default function App() {
   return (
     <BrowserRouter>
       <Routes>
@@ -184,51 +204,64 @@ export default function App() {
         <Route path="/login"  element={<Login />} />
         <Route path="/signup" element={<Signup />} />
 
-        {/* ── Caregiver routes ── */}
+        {/* ── Caregiver ── */}
         <Route path="/dashboard" element={
-          <RequireRole role="caregiver">
-            <AppShell><Dashboard /></AppShell>
-          </RequireRole>
-        }/>
-        <Route path="/data" element={
-          <RequireRole role="caregiver">
-            <AppShell><Data /></AppShell>
-          </RequireRole>
-        }/>
-        <Route path="/analysis" element={
-          <RequireRole role="caregiver">
-            <AppShell><Analysis /></AppShell>
-          </RequireRole>
+          <RequireCaregiver><AppShell><CaregiverDashboard /></AppShell></RequireCaregiver>
         }/>
         <Route path="/alerts" element={
-          <RequireRole role="caregiver">
-            <AppShell><Alerts /></AppShell>
-          </RequireRole>
+          <RequireCaregiver><AppShell><Alerts /></AppShell></RequireCaregiver>
         }/>
         <Route path="/messages" element={
-          <RequireRole role="caregiver">
-            <AppShell><MessageDoctor /></AppShell>
-          </RequireRole>
+          <RequireCaregiver><AppShell><Messages /></AppShell></RequireCaregiver>
+        }/>
+        <Route path="/messages/:resultId" element={
+          <RequireCaregiver><AppShell><Messages /></AppShell></RequireCaregiver>
+        }/>
+        <Route path="/activity" element={
+          <RequireCaregiver><AppShell><Activity /></AppShell></RequireCaregiver>
         }/>
 
-        {/* ── Doctor routes ── */}
-        <Route path="/doctor/overview" element={
-          <RequireRole role="doctor">
-            <AppShell><DoctorOverview /></AppShell>
-          </RequireRole>
-        }/>
+        {/* ── Doctor ──
+              /doctor/dashboard  → DoctorOverview   (stats + table)
+              /doctor/review     → DoctorDashboard  (anomaly review + diagnosis)
+              /doctor/messages   → DoctorDashboard  with messages tab auto-open
+        */}
         <Route path="/doctor/dashboard" element={
-          <RequireRole role="doctor">
-            <AppShell><DoctorDashboard /></AppShell>
-          </RequireRole>
+          <RequireDoctor><AppShell><DoctorOverview /></AppShell></RequireDoctor>
+        }/>
+        {/*<Route path="/doctor/review" element={
+          <RequireDoctor><AppShell><DoctorReview /></AppShell></RequireDoctor>
+        }/>
+        <Route path="/doctor/review/:resultId" element={
+          <RequireDoctor><AppShell><DoctorReview /></AppShell></RequireDoctor>
+        }/>*/}
+        <Route path="/doctor/messages" element={
+          <RequireDoctor><AppShell><DoctorMessages /></AppShell></RequireDoctor>
+        }/>
+        <Route path="/doctor/messages/:resultId" element={
+          <RequireDoctor><AppShell><DoctorMessages /></AppShell></RequireDoctor>
+        }/>
+
+        {/* ── Admin ── */}
+        <Route path="/admin/dashboard" element={
+          <RequireAdmin><AppShell><AdminDashboard /></AppShell></RequireAdmin>
+        }/>
+        <Route path="/admin/homes" element={
+          <RequireAdmin><AppShell><AdminHomes /></AppShell></RequireAdmin>
+        }/>
+        <Route path="/admin/datasets" element={
+          <RequireAdmin><AppShell><AdminDatasets /></AppShell></RequireAdmin>
+        }/>
+        <Route path="/admin/analysis" element={
+          <RequireAdmin><AppShell><AdminAnalysis /></AppShell></RequireAdmin>
+        }/>
+        <Route path="/admin/users" element={
+          <RequireAdmin><AppShell><AdminUsers /></AppShell></RequireAdmin>
         }/>
 
         {/* Catch-all */}
-        <Route path="*" element={
-          user?.role === "doctor"
-            ? <Navigate to="/doctor/overview" replace />
-            : <Navigate to="/dashboard" replace />
-        }/>
+        <Route path="*" element={<SmartRedirect />} />
+        <Route path="/report" element={<Report />} />
       </Routes>
     </BrowserRouter>
   );

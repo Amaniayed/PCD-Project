@@ -1,35 +1,128 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { authService } from "../services/api";
+
+import {
+  Chart,
+  ArcElement,
+  Tooltip,
+  Legend,
+  DoughnutController,
+  BarController,
+  BarElement,
+  CategoryScale,
+  LinearScale,
+} from "chart.js";
+Chart.register(ArcElement, Tooltip, Legend, DoughnutController, BarController, BarElement, CategoryScale, LinearScale);
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:8000";
 const authHeaders = () => ({ Authorization: `Bearer ${authService.getToken()}` });
 
-const TYPE_COLOR = {
-  "Temporal Shift": "#3b82f6",
+// ── Human-readable labels ────────────────────────────────
+const FRIENDLY_TITLE = {
+  "Temporal Shift": "Unusual behavior detected",
+  "Duration":       "Change in daily routine",
+  "Order":          "Unusual behavior detected",
+  "Unknown":        "Minor routine variation",
+};
+const FRIENDLY_SUB = {
+  "Temporal Shift": "Activity pattern differed from the usual daily schedule",
+  "Duration":       "Activity periods were shorter or longer than normal",
+  "Order":          "Daily activities happened in an unexpected order",
+  "Unknown":        "A small deviation from the usual pattern was recorded",
+};
+const FRIENDLY_TYPE = {
+  "Temporal Shift": "Routine change",
+  "Duration":       "Activity duration",
+  "Order":          "Schedule shift",
+  "Unknown":        "Minor change",
+};
+const FRIENDLY_TIME = {
+  "Temporal Shift": "Morning / Evening period",
+  "Duration":       "Throughout the day",
+  "Order":          "Morning & Evening",
+  "Unknown":        "Daytime",
+};
+const FRIENDLY_CHANGE = {
+  "Temporal Shift": "Activities shifted ~2–4 hours from usual time",
+  "Duration":       "Activity duration reduced or extended significantly",
+  "Order":          "Morning and evening routines were swapped",
+  "Unknown":        "Minor deviation, within acceptable range",
+};
+const FRIENDLY_ACTION = {
+  "Temporal Shift": "Check in with the resident and note any changes in sleep or meals",
+  "Duration":       "Monitor over the next few days and consult the doctor if it continues",
+  "Order":          "Consider contacting the family and scheduling a doctor review",
+  "Unknown":        "No immediate action needed — continue regular monitoring",
+};
+const ALERT_COLOR = {
+  "Temporal Shift": "#ef4444",
   "Duration":       "#d97706",
-  "Order":          "#db2777",
-  "Unknown":        "#9ca3af",
+  "Order":          "#ef4444",
+  "Unknown":        "#6366f1",
+};
+
+// ── Helper: safely parse JSONB that may come as a string ────
+const safeParseJSON = (val) => {
+  if (!val) return [];
+  if (Array.isArray(val)) return val;
+  try { return JSON.parse(val); } catch { return []; }
+};
+
+// ── Donut center-text plugin ─────────────────────────────
+const centerTextPlugin = {
+  id: "centerText",
+  beforeDraw(chart) {
+    const { width, height, ctx } = chart;
+    const pct = chart.data.datasets[0]?._safePct ?? "";
+    ctx.save();
+    ctx.font = "500 19px 'DM Sans', sans-serif";
+    ctx.fillStyle = "#10b981";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(pct, width / 2, height / 2 - 9);
+    ctx.font = "400 11px 'DM Sans', sans-serif";
+    ctx.fillStyle = "#9196a8";
+    ctx.fillText("safe", width / 2, height / 2 + 11);
+    ctx.restore();
+  },
 };
 
 export default function Dashboard() {
-  const navigate = useNavigate();
+  const navigate  = useNavigate();
+  const chartRef      = useRef(null);
+  const chartInst     = useRef(null);
+  const barChartRef   = useRef(null);
+  const barChartInst  = useRef(null);
+  const typeChartRef  = useRef(null);
+  const typeChartInst = useRef(null);
 
-  // ── role ─────────────────────────────────────────────────
   const user        = authService.getUser?.() || null;
   const role        = user?.role || "caregiver";
   const isCaregiver = role === "caregiver";
 
-  const [data,    setData]    = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error,   setError]   = useState("");
-  // notification state per anomaly row
-  const [notif,   setNotif]   = useState({});
+  const [data,       setData]      = useState(null);
+  const [alerts,     setAlerts]    = useState([]);
+  const [loading,    setLoading]   = useState(true);
+  const [error,      setError]     = useState("");
+  const [expanded,   setExpanded]  = useState({});
+  const [notif,      setNotif]     = useState({});
+  const [showReport, setShowReport]= useState(false);
+  const [reportData, setReportData]= useState(null);
+  const [reportLoad, setReportLoad]= useState(false);
 
   useEffect(() => {
-    fetch(`${API}/dashboard/stats`, { headers: authHeaders() })
-      .then((r) => r.json())
-      .then((d) => { if (d.detail) throw new Error(d.detail); setData(d); })
+    const headers = authHeaders();
+    Promise.all([
+      fetch(`${API}/dashboard/stats`, { headers }).then(r => r.json()),
+      fetch(`${API}/alerts`,          { headers }).then(r => r.json()).catch(() => []),
+    ])
+      .then(([d, a]) => {
+        if (d.detail) throw new Error(d.detail);
+        setData(d);
+        // alerts come back newest-first; take up to 6 unread or recent
+        setAlerts(Array.isArray(a) ? a.slice(0, 6) : []);
+      })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, []);
@@ -38,153 +131,398 @@ export default function Dashboard() {
   const latest = data?.latest || null;
   const recent = data?.recentAnomalies || [];
 
-  const statCards = [
-    { label: "Total Homes",     value: stats.total_homes     ?? 0, icon: "🏠", color: "#6366f1" },
-    { label: "Datasets",        value: stats.total_datasets  ?? 0, icon: "📂", color: "#3b82f6" },
-    { label: "Analyses Run",    value: stats.total_analyses  ?? 0, icon: "⚡", color: "#d97706" },
-    { label: "Anomalies Found", value: stats.total_anomalies ?? 0, icon: "⚠",  color: "#ef4444" },
-    { label: "Clean Days",      value: stats.total_clean_days?? 0, icon: "✓",  color: "#10b981" },
-  ];
+  // Build anomaly list from alerts (each alert has an anomalies array)
+  const anomalyList = alerts.flatMap((alert) =>
+    safeParseJSON(alert.anomalies).map((a) => ({
+      ...a,
+      home_name:    alert.home_name,
+      analysis_id:  alert.analysis_result_id,
+    }))
+  ).slice(0, 6);
 
-  // ── caregiver notification handlers ──────────────────────
-  const sendToDoctor = async (i) => {
-    setNotif(n => ({ ...n, [`doc_${i}`]: "sending" }));
-    // TODO: wire to real backend endpoint e.g. POST /notify/doctor
-    await new Promise(r => setTimeout(r, 900));
-    setNotif(n => ({ ...n, [`doc_${i}`]: "sent" }));
+  // Donut uses latest analysis run (not cumulative)
+  const donutTotal   = latest ? (latest.total_days      ?? 0) : 0;
+  const donutAlert   = latest ? (latest.total_anomalies ?? 0) : 0;
+  const donutClean   = donutTotal - donutAlert;
+  const donutSafePct = donutTotal > 0
+    ? `${((donutClean / donutTotal) * 100).toFixed(1)}%`
+    : "—";
+
+  // Stat cards use cumulative totals
+  const totalCleanDays = stats.total_clean_days ?? 0;
+  const totalAlertDays = stats.total_anomalies  ?? 0;
+
+  // Build / update donut
+  useEffect(() => {
+    if (!chartRef.current || loading) return;
+    if (chartInst.current) { chartInst.current.destroy(); chartInst.current = null; }
+
+    const dataset = {
+      data: [donutClean > 0 ? donutClean : 1, donutAlert],
+      backgroundColor: ["#10b981", "#ef4444"],
+      borderWidth: 0,
+      hoverOffset: 4,
+    };
+    dataset._safePct = donutSafePct;
+
+    chartInst.current = new Chart(chartRef.current, {
+      type: "doughnut",
+      data: { datasets: [dataset] },
+      options: {
+        cutout: "72%",
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: (ctx) =>
+                ctx.dataIndex === 0
+                  ? `Safe days: ${donutClean}`
+                  : `Alert days: ${donutAlert}`,
+            },
+          },
+        },
+        animation: { duration: 500 },
+      },
+      plugins: [centerTextPlugin],
+    });
+
+    return () => {
+      if (chartInst.current) { chartInst.current.destroy(); chartInst.current = null; }
+    };
+  }, [loading, donutClean, donutAlert, donutSafePct]);
+
+  // ── Anomaly frequency bar chart (by month) ──────────────
+  useEffect(() => {
+    if (!barChartRef.current || loading) return;
+    if (barChartInst.current) { barChartInst.current.destroy(); barChartInst.current = null; }
+
+    // Aggregate anomalies by month from all alerts
+    const allAnomalies = alerts.flatMap(a => safeParseJSON(a.anomalies));
+    const monthCounts = {};
+    allAnomalies.forEach(a => {
+      if (!a.date) return;
+      const d = new Date(a.date);
+      if (isNaN(d)) return;
+      const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+      monthCounts[key] = (monthCounts[key] || 0) + 1;
+    });
+
+    const sortedKeys = Object.keys(monthCounts).sort();
+    const labels = sortedKeys.map(k => {
+      const [y, m] = k.split("-");
+      return new Date(+y, +m-1).toLocaleDateString("en-GB", { month:"short", year:"2-digit" });
+    });
+    const values = sortedKeys.map(k => monthCounts[k]);
+
+    if (labels.length === 0) return;
+
+    barChartInst.current = new Chart(barChartRef.current, {
+      type: "bar",
+      data: {
+        labels,
+        datasets: [{
+          label: "Anomalies",
+          data: values,
+          backgroundColor: "rgba(99,102,241,0.75)",
+          borderRadius: 6,
+          borderSkipped: false,
+          hoverBackgroundColor: "#6366f1",
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              title: (items) => `Month: ${items[0].label}`,
+              label: (item) => ` ${item.raw} anomalies detected`,
+            },
+          },
+        },
+        scales: {
+          x: {
+            grid: { display: false },
+            ticks: { font: { size: 11 }, color: "#9196a8" },
+          },
+          y: {
+            beginAtZero: true,
+            grid: { color: "#f1f2f6" },
+            ticks: { font: { size: 11 }, color: "#9196a8", stepSize: 1 },
+          },
+        },
+        animation: { duration: 600 },
+      },
+    });
+
+    return () => { if (barChartInst.current) { barChartInst.current.destroy(); barChartInst.current = null; } };
+  }, [loading, alerts]);
+
+  // ── Anomaly type breakdown horizontal bar ────────────────
+  useEffect(() => {
+    if (!typeChartRef.current || loading) return;
+    if (typeChartInst.current) { typeChartInst.current.destroy(); typeChartInst.current = null; }
+
+    const typeCounts = latest?.type_counts
+      ? (typeof latest.type_counts === "string" ? JSON.parse(latest.type_counts) : latest.type_counts)
+      : {};
+
+    const entries = Object.entries(typeCounts);
+    if (entries.length === 0) return;
+
+    const COLORS = {
+      "Temporal Shift": "#6366f1",
+      "Duration":       "#f59e0b",
+      "Order":          "#ec4899",
+      "Unknown":        "#9ca3af",
+    };
+
+    const labels = entries.map(([t]) => t);
+    const values = entries.map(([, v]) => v);
+    const colors = labels.map(l => COLORS[l] || "#6366f1");
+
+    typeChartInst.current = new Chart(typeChartRef.current, {
+      type: "bar",
+      data: {
+        labels,
+        datasets: [{
+          label: "Count",
+          data: values,
+          backgroundColor: colors.map(c => `${c}cc`),
+          borderRadius: 6,
+          borderSkipped: false,
+          hoverBackgroundColor: colors,
+        }],
+      },
+      options: {
+        indexAxis: "y",
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: { label: (item) => ` ${item.raw} days` },
+          },
+        },
+        scales: {
+          x: {
+            beginAtZero: true,
+            grid: { color: "#f1f2f6" },
+            ticks: { font: { size: 11 }, color: "#9196a8", stepSize: 1 },
+          },
+          y: {
+            grid: { display: false },
+            ticks: { font: { size: 12, weight: "500" }, color: "#4b5060" },
+          },
+        },
+        animation: { duration: 600 },
+      },
+    });
+
+    return () => { if (typeChartInst.current) { typeChartInst.current.destroy(); typeChartInst.current = null; } };
+  }, [loading, latest]);
+
+  const handleNotif = async (key) => {
+    setNotif((n) => ({ ...n, [key]: "sending" }));
+    await new Promise((r) => setTimeout(r, 800));
+    setNotif((n) => ({ ...n, [key]: "sent" }));
   };
-  const notifyFamily = async (i) => {
-    setNotif(n => ({ ...n, [`fam_${i}`]: "sending" }));
-    // TODO: wire to real backend endpoint e.g. POST /notify/family
-    await new Promise(r => setTimeout(r, 900));
-    setNotif(n => ({ ...n, [`fam_${i}`]: "sent" }));
+
+  const toggleExpand = (i) =>
+    setExpanded((e) => ({ ...e, [i]: !e[i] }));
+
+  // Open full report modal — fetch anomaly details for latest analysis
+  const openReport = async () => {
+    if (!latest?.id) return;
+    setShowReport(true);
+    if (reportData?.id === latest.id) return; // already loaded
+    setReportLoad(true);
+    try {
+      const res = await fetch(`${API}/analyze/results`, { headers: authHeaders() });
+      const all = await res.json();
+      const found = Array.isArray(all) ? all.find(r => r.id === latest.id) : null;
+      setReportData(found || latest);
+    } catch {
+      setReportData(latest);
+    } finally {
+      setReportLoad(false);
+    }
+  };
+
+  const greet = () => {
+    const h = new Date().getHours();
+    if (h < 12) return "Good morning";
+    if (h < 18) return "Good afternoon";
+    return "Good evening";
   };
 
   return (
     <div className="dash">
-      {/* ── Header ── */}
+      {/* Header — no Add Home (admin only) */}
       <div className="dash-header">
         <div>
-          <div className="header-title-row">
-            <h1>Dashboard</h1>
-            {/* Role pill — visible immediately next to the title */}
-            <span className={`role-pill role-pill--${role}`}>
-              {role === "doctor" ? "🧑‍⚕️ Doctor" : "👩‍⚕️ Caregiver"}
-            </span>
-          </div>
-          <p>Welcome back{user?.name ? `, ${user.name}` : ""} — here's your overview</p>
+          <h1>{greet()}{user?.name ? `, ${user.name}` : ""}</h1>
+          <p>Here's the wellbeing summary for your monitored resident</p>
         </div>
-        <div className="header-actions">
-          <button className="btn-action"         onClick={() => navigate("/data")}>⊞ Upload Data</button>
-          <button className="btn-action primary" onClick={() => navigate("/analysis")}>⚡ Run Analysis</button>
-        </div>
+        <button className="btn primary" onClick={() => navigate("/activity")}>
+          Run Check
+        </button>
       </div>
 
       {error && <div className="alert-error">{error}</div>}
 
       {loading ? (
-        <div className="loading">
-          <div className="spinner" />
-          <p>Loading dashboard…</p>
-        </div>
+        <div className="loading"><div className="spinner" /><p>Loading…</p></div>
       ) : (
         <>
-          {/* Stat Cards */}
-          <div className="stats-grid">
-            {statCards.map((s) => (
+          {/* Stat cards */}
+          <div className="stat-row">
+            {[
+              { label: "Homes monitored",     value: stats.total_homes    ?? 0, color: "#6366f1" },
+              { label: "Safe days recorded",  value: totalCleanDays,            color: "#10b981" },
+              { label: "Days with alerts",    value: totalAlertDays,            color: "#ef4444" },
+              { label: "Check-ups completed", value: stats.total_analyses  ?? 0, color: "#0ea5e9" },
+            ].map((s) => (
               <div key={s.label} className="stat-card">
-                <div className="stat-icon">{s.icon}</div>
-                <div>
-                  <div className="stat-value" style={{ color: s.color }}>{s.value.toLocaleString()}</div>
-                  <div className="stat-label">{s.label}</div>
-                </div>
+                <div className="stat-label">{s.label}</div>
+                <div className="stat-val" style={{ color: s.color }}>{s.value.toLocaleString()}</div>
               </div>
             ))}
           </div>
 
-          <div className="bottom-grid">
-            {/* Last Analysis */}
-            <div className="card">
-              <h2>Last Analysis</h2>
-              {latest ? (
-                <div className="latest-analysis">
-                  <div className="latest-row"><span className="latest-label">Home</span><span className="latest-val">🏠 {latest.home_name || "—"}</span></div>
-                  <div className="latest-row"><span className="latest-label">File</span><span className="latest-val">📄 {latest.file_name || "—"}</span></div>
-                  <div className="latest-row">
-                    <span className="latest-label">Pipeline</span>
-                    <span className="pipeline-badge">{latest.pipeline === "REFIT" ? "🏠" : "⚡"} {latest.pipeline}</span>
+          {/* Last check banner */}
+          {latest && (
+            <div className="overview-card">
+              <div className="card-title">Last monitoring check</div>
+              <div className="last-check-row">
+                <div className="check-info">
+                  <div className="home-badge">🏠 {latest.home_name || "—"}</div>
+                  <div>
+                    <div className={latest.total_anomalies > 0 ? "status-warn" : "status-ok"}>
+                      {latest.total_anomalies > 0
+                        ? `${latest.total_anomalies} unusual day${latest.total_anomalies > 1 ? "s" : ""} detected`
+                        : "All clear — no unusual activity"}
+                    </div>
+                    <div className="check-meta">
+                      Checked on {new Date(latest.analyzed_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
+                      &nbsp;·&nbsp;{latest.total_days} days analyzed
+                    </div>
                   </div>
-                  <div className="latest-row"><span className="latest-label">Total Days</span><span className="latest-val">{latest.total_days}</span></div>
-                  <div className="latest-row">
-                    <span className="latest-label">Anomalies</span>
-                    <span style={{ color: "#ef4444", fontWeight: 700 }}>
-                      {latest.total_anomalies}
-                      <span style={{ color: "#9196a8", fontWeight: 400, fontSize: 12, marginLeft: 6 }}>({latest.anomaly_rate}%)</span>
-                    </span>
-                  </div>
-                  <div className="latest-row">
-                    <span className="latest-label">Threshold</span>
-                    <span style={{ color: "#10b981", fontFamily: "monospace", fontSize: 13 }}>{Number(latest.threshold).toFixed(5)}</span>
-                  </div>
-                  <div className="latest-row">
-                    <span className="latest-label">Date</span>
-                    <span className="latest-val">{new Date(latest.analyzed_at).toLocaleString()}</span>
-                  </div>
-                  <button className="btn-goto" onClick={() => navigate("/analysis")}>Run new analysis →</button>
                 </div>
+                <button className="btn" onClick={openReport}>View full report</button>
+              </div>
+            </div>
+          )}
+
+          {/* Main grid: donut + alerts */}
+          <div className="main-grid">
+            {/* Donut */}
+            <div className="card">
+              <div className="card-title">
+                Latest check overview
+                {latest && (
+                  <span className="donut-sub">
+                    {latest.home_name} · {new Date(latest.analyzed_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}
+                  </span>
+                )}
+              </div>
+              {!latest ? (
+                <div className="empty-state">Run a check to see the activity overview</div>
               ) : (
-                <div className="empty-state">
-                  <p>No analysis run yet.</p>
-                  <button className="btn-action primary" onClick={() => navigate("/analysis")}>⚡ Run First Analysis</button>
+                <div className="donut-wrap">
+                  <canvas ref={chartRef} width="160" height="160" />
+                  <div className="donut-legend">
+                    <div className="leg-row">
+                      <div><span className="leg-dot" style={{ background: "#10b981" }} />Normal days</div>
+                      <span style={{ fontWeight: 500 }}>{donutClean.toLocaleString()}</span>
+                    </div>
+                    <div className="leg-row">
+                      <div><span className="leg-dot" style={{ background: "#ef4444" }} />Days with alerts</div>
+                      <span style={{ fontWeight: 500, color: "#ef4444" }}>{donutAlert}</span>
+                    </div>
+                    <div className="leg-divider">
+                      <div className="leg-row">
+                        <span className="muted">Alert rate</span>
+                        <span style={{ color: donutAlert > 0 ? "#ef4444" : "#10b981", fontWeight: 500, fontSize: 12 }}>
+                          {donutTotal > 0 ? `${((donutAlert / donutTotal) * 100).toFixed(1)}%` : "—"}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
 
-            {/* Recent Anomalies */}
+            {/* Alert cards */}
             <div className="card">
-              <h2>Recent Anomalies</h2>
-              {recent.length === 0 ? (
-                <div className="empty-state"><p>No anomalies recorded yet.</p></div>
+              <div className="card-title">Recent alerts</div>
+              {anomalyList.length === 0 ? (
+                <div className="empty-state">
+                  <div style={{ fontSize: 32, marginBottom: 10 }}>✅</div>
+                  No unusual activity detected in recent checks
+                </div>
               ) : (
-                <div className="anomaly-list">
-                  {recent.map((a, i) => {
-                    const color = TYPE_COLOR[a.anomaly_type] || TYPE_COLOR["Unknown"];
-                    return (
-                      <div key={i} className="anomaly-item">
-                        <div className="anomaly-dot" style={{ background: color }} />
-                        <div className="anomaly-body">
-                          <div className="anomaly-top">
-                            <span className="anomaly-date">{a.date}</span>
-                            <span className="anomaly-type-badge" style={{ color, background: `${color}18` }}>{a.anomaly_type}</span>
-                          </div>
-                          <div className="anomaly-meta">
-                            🏠 {a.home_name} &nbsp;·&nbsp; Error: <span style={{ fontFamily: "monospace" }}>{a.reconstruction_error?.toFixed(5)}</span>
-                          </div>
+                <div className="alerts-list">
+                  {anomalyList.map((a, i) => {
+                    const color  = ALERT_COLOR[a.anomaly_type]    || "#6366f1";
+                    const title  = FRIENDLY_TITLE[a.anomaly_type]  || "Unusual behavior detected";
+                    const sub    = FRIENDLY_SUB[a.anomaly_type]    || "A deviation from the usual pattern";
+                    const type   = FRIENDLY_TYPE[a.anomaly_type]   || "Change";
+                    const time   = FRIENDLY_TIME[a.anomaly_type]   || "Daytime";
+                    const change = FRIENDLY_CHANGE[a.anomaly_type] || "Deviation recorded";
+                    const action = FRIENDLY_ACTION[a.anomaly_type] || "Continue monitoring";
+                    const docKey = `doc_${i}`;
+                    const famKey = `fam_${i}`;
+                    const open   = !!expanded[i];
 
-                          {/* ── Caregiver-only: Send to Doctor / Notify Family ── */}
-                          {isCaregiver && (
-                            <div className="anomaly-actions">
-                              <button
-                                className={`act-btn act-doctor${notif[`doc_${i}`] === "sent" ? " sent" : ""}`}
-                                disabled={!!notif[`doc_${i}`]}
-                                onClick={() => sendToDoctor(i)}
-                              >
-                                {notif[`doc_${i}`] === "sending" ? "⏳ Sending…"
-                                : notif[`doc_${i}`] === "sent"   ? "✓ Sent to Doctor"
-                                : "🧑‍⚕️ Send to Doctor"}
-                              </button>
-                              <button
-                                className={`act-btn act-family${notif[`fam_${i}`] === "sent" ? " sent" : ""}`}
-                                disabled={!!notif[`fam_${i}`]}
-                                onClick={() => notifyFamily(i)}
-                              >
-                                {notif[`fam_${i}`] === "sending" ? "⏳ Sending…"
-                                : notif[`fam_${i}`] === "sent"   ? "✓ Family Notified"
-                                : "👨‍👩‍👧 Notify Family"}
-                              </button>
-                            </div>
-                          )}
+                    return (
+                      <div key={i} className="alert-item">
+                        <div className="alert-header" onClick={() => toggleExpand(i)}>
+                          <span className="alert-dot" style={{ background: color }} />
+                          <div className="alert-main">
+                            <div className="alert-title">{title}</div>
+                            <div className="alert-sub">{sub}</div>
+                          </div>
+                          <div className="alert-date">{a.date}</div>
+                          <span className={`alert-chevron${open ? " open" : ""}`}>▼</span>
                         </div>
+                        {open && (
+                          <div className="alert-detail">
+                            <div className="detail-grid">
+                              <div className="detail-item"><label>Home</label><span>{a.home_name || "—"}</span></div>
+                              <div className="detail-item"><label>Alert type</label><span>{type}</span></div>
+                              <div className="detail-item"><label>Period affected</label><span>{time}</span></div>
+                              <div className="detail-item"><label>What was observed</label><span>{change}</span></div>
+                            </div>
+                            <div className="suggestion-box">
+                              <span className="suggestion-label">Suggestion</span>
+                              {action}
+                            </div>
+                            {isCaregiver && (
+                              <div className="detail-actions">
+                                <button
+                                  className={`act-btn doctor${notif[docKey] === "sent" ? " sent" : ""}`}
+                                  disabled={!!notif[docKey]}
+                                  onClick={() => handleNotif(docKey)}
+                                >
+                                  {notif[docKey] === "sending" ? "Sending…"
+                                    : notif[docKey] === "sent"  ? "✓ Sent to doctor"
+                                    : "Notify doctor"}
+                                </button>
+                                <button
+                                  className={`act-btn family${notif[famKey] === "sent" ? " sent" : ""}`}
+                                  disabled={!!notif[famKey]}
+                                  onClick={() => handleNotif(famKey)}
+                                >
+                                  {notif[famKey] === "sending" ? "Sending…"
+                                    : notif[famKey] === "sent"  ? "✓ Family notified"
+                                    : "Notify family"}
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -193,21 +531,14 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Quick Actions */}
-          <div className="card quick-actions">
-            <h2>Quick Actions</h2>
+          {/* Quick actions */}
+          <div className="card">
+            <div className="card-title">Quick actions</div>
             <div className="actions-grid">
               {[
-                { icon: "🏠", label: "Add a Home",      sub: "Register a new home",  to: "/data"     },
-                { icon: "📂", label: "Upload Dataset",   sub: "Import a CSV file",    to: "/data"     },
-                { icon: "⚡", label: "Run Analysis",     sub: "Detect anomalies",     to: "/analysis" },
-                ...(isCaregiver ? [
-                  { icon: "🔔", label: "Manage Alerts",  sub: "Alert preferences",    to: "/alerts"   },
-                  { icon: "📩", label: "Message Doctor", sub: "Send patient report",  to: "/messages" },
-                ] : []),
-                ...(role === "doctor" ? [
-                  { icon: "🩺", label: "Medical View",   sub: "Diagnose & interpret", to: "/doctor/dashboard" },
-                ] : []),
+                { icon: "🔍", label: "Run monitoring check", sub: "Analyze latest activity",  to: "/activity" },
+                { icon: "🔔", label: "View all alerts",      sub: "Review notifications",      to: "/alerts"       },
+                { icon: "💬", label: "Contact doctor",       sub: "Send a patient report",    to: "/messages"     },
               ].map((a) => (
                 <div key={a.label} className="action-card" onClick={() => navigate(a.to)}>
                   <span className="action-icon">{a.icon}</span>
@@ -219,77 +550,246 @@ export default function Dashboard() {
               ))}
             </div>
           </div>
+          {/* ── Charts row ── */}
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, marginBottom:16 }}>
+
+            {/* Anomaly frequency over time */}
+            <div className="card">
+              <div className="card-title">
+                📈 Anomaly frequency over time
+                <span className="donut-sub">Monthly breakdown</span>
+              </div>
+              {alerts.length === 0 || safeParseJSON(alerts[0]?.anomalies).length === 0 ? (
+                <div className="empty-state">Run a check to see the trend chart</div>
+              ) : (
+                <div style={{ position:"relative", height:200 }}>
+                  <canvas ref={barChartRef} />
+                </div>
+              )}
+            </div>
+
+            {/* Anomaly type breakdown */}
+            <div className="card">
+              <div className="card-title">
+                🧩 Anomaly type breakdown
+                <span className="donut-sub">Latest analysis</span>
+              </div>
+              {!latest?.type_counts || Object.keys(typeof latest.type_counts === "string" ? JSON.parse(latest.type_counts) : latest.type_counts).length === 0 ? (
+                <div className="empty-state">No type data available yet</div>
+              ) : (
+                <div style={{ position:"relative", height:200 }}>
+                  <canvas ref={typeChartRef} />
+                </div>
+              )}
+            </div>
+          </div>
         </>
+      )}
+
+      {/* ── Full Report Modal ── */}
+      {showReport && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.35)", zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}
+          onClick={(e) => { if (e.target === e.currentTarget) setShowReport(false); }}>
+          <div style={{ background:"#fff", borderRadius:20, width:"100%", maxWidth:780, maxHeight:"88vh", overflowY:"auto", boxShadow:"0 24px 60px rgba(0,0,0,0.18)", display:"flex", flexDirection:"column" }}>
+
+            {/* Modal header */}
+            <div style={{ padding:"20px 24px", borderBottom:"1px solid #f1f2f6", display:"flex", justifyContent:"space-between", alignItems:"center", position:"sticky", top:0, background:"#fff", zIndex:1, borderRadius:"20px 20px 0 0" }}>
+              <div>
+                <div style={{ fontSize:18, fontWeight:700, color:"#0f172a" }}>📋 Full Analysis Report</div>
+                {reportData && (
+                  <div style={{ fontSize:12, color:"#9196a8", marginTop:3 }}>
+                    🏠 {reportData.home_name || "—"} &nbsp;·&nbsp; {reportData.pipeline} &nbsp;·&nbsp;
+                    {new Date(reportData.analyzed_at || reportData.created_at).toLocaleDateString("en-GB", { day:"numeric", month:"short", year:"numeric" })}
+                  </div>
+                )}
+              </div>
+              <button onClick={() => setShowReport(false)} style={{ background:"#f4f6fb", border:"none", borderRadius:8, width:34, height:34, cursor:"pointer", fontSize:16, color:"#9196a8", display:"flex", alignItems:"center", justifyContent:"center" }}>✕</button>
+            </div>
+
+            <div style={{ padding:"22px 24px", display:"flex", flexDirection:"column", gap:20 }}>
+              {reportLoad ? (
+                <div style={{ textAlign:"center", padding:48, color:"#9196a8" }}>
+                  <div style={{ width:36, height:36, border:"3px solid #e8eaf0", borderTopColor:"#6366f1", borderRadius:"50%", animation:"spin 0.8s linear infinite", margin:"0 auto 12px" }} />
+                  Loading report…
+                </div>
+              ) : reportData ? (
+                <>
+                  {/* Summary stat row */}
+                  <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12 }}>
+                    {[
+                      { label:"Total Days",      value: reportData.total_days,      color:"#6366f1" },
+                      { label:"Anomalies Found", value: reportData.total_anomalies, color:"#ef4444" },
+                      { label:"Normal Days",     value: (reportData.total_days||0)-(reportData.total_anomalies||0), color:"#10b981" },
+                      { label:"Anomaly Rate",    value: reportData.total_days > 0 ? `${((reportData.total_anomalies/reportData.total_days)*100).toFixed(1)}%` : "—", color:"#f59e0b" },
+                    ].map(s => (
+                      <div key={s.label} style={{ background:"#f8fafc", border:"1px solid #e8eaf0", borderRadius:12, padding:"14px 16px" }}>
+                        <div style={{ fontSize:11, color:"#9196a8", textTransform:"uppercase", letterSpacing:"0.5px", marginBottom:6 }}>{s.label}</div>
+                        <div style={{ fontSize:24, fontWeight:700, color:s.color }}>{s.value}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Type breakdown */}
+                  {reportData.type_counts && Object.keys(reportData.type_counts).length > 0 && (
+                    <div style={{ background:"#f8fafc", border:"1px solid #e8eaf0", borderRadius:12, padding:"16px 18px" }}>
+                      <div style={{ fontSize:13, fontWeight:600, color:"#475569", marginBottom:12 }}>Anomaly Type Breakdown</div>
+                      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:10 }}>
+                        {Object.entries(reportData.type_counts).map(([type, count]) => {
+                          const col = { "Temporal Shift":"#6366f1","Duration":"#f59e0b","Order":"#ec4899","Unknown":"#9ca3af" }[type] || "#9ca3af";
+                          const pct = reportData.total_anomalies > 0 ? Math.round((count/reportData.total_anomalies)*100) : 0;
+                          return (
+                            <div key={type} style={{ background:"#fff", border:`1px solid ${col}30`, borderRadius:10, padding:"12px 14px" }}>
+                              <div style={{ display:"flex", justifyContent:"space-between", marginBottom:6 }}>
+                                <span style={{ fontSize:12, fontWeight:600, color:col }}>{type}</span>
+                                <span style={{ fontSize:16, fontWeight:700, color:"#0f172a" }}>{count}</span>
+                              </div>
+                              <div style={{ height:5, background:"#f1f2f6", borderRadius:99, overflow:"hidden" }}>
+                                <div style={{ width:`${pct}%`, height:"100%", background:col, borderRadius:99 }} />
+                              </div>
+                              <div style={{ fontSize:11, color:"#9196a8", marginTop:4 }}>{pct}% of anomalies</div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Anomaly table */}
+                  {Array.isArray(reportData.anomalies) && reportData.anomalies.length > 0 && (
+                    <div style={{ background:"#f8fafc", border:"1px solid #e8eaf0", borderRadius:12, padding:"16px 18px" }}>
+                      <div style={{ fontSize:13, fontWeight:600, color:"#475569", marginBottom:12 }}>
+                        Detected Anomalies
+                        <span style={{ marginLeft:8, background:"#fee2e2", color:"#ef4444", borderRadius:20, padding:"2px 10px", fontSize:11, fontWeight:700 }}>
+                          {reportData.anomalies.length}
+                        </span>
+                      </div>
+                      <div style={{ overflowX:"auto", borderRadius:8, border:"1px solid #e8eaf0" }}>
+                        <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+                          <thead>
+                            <tr style={{ borderBottom:"1px solid #e8eaf0", background:"#f8fafc" }}>
+                              {["#","Date","Type","Reconstruction Error"].map(h => (
+                                <th key={h} style={{ textAlign:"left", padding:"9px 14px", fontSize:11, fontWeight:600, color:"#9196a8", textTransform:"uppercase", letterSpacing:"0.4px" }}>{h}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {reportData.anomalies.map((a, i) => {
+                              const col = { "Temporal Shift":"#6366f1","Duration":"#f59e0b","Order":"#ec4899","Unknown":"#9ca3af" }[a.anomaly_type] || "#9ca3af";
+                              return (
+                                <tr key={i} style={{ borderBottom:"1px solid #f1f2f6" }}>
+                                  <td style={{ padding:"10px 14px", color:"#b0b5c4", fontSize:12 }}>{(a.day_index??i)+1}</td>
+                                  <td style={{ padding:"10px 14px", color:"#1e293b", fontWeight:500 }}>{a.date}</td>
+                                  <td style={{ padding:"10px 14px" }}>
+                                    <span style={{ background:`${col}18`, color:col, borderRadius:6, padding:"3px 9px", fontSize:11, fontWeight:700 }}>{a.anomaly_type}</span>
+                                  </td>
+                                  <td style={{ padding:"10px 14px", fontFamily:"monospace", fontSize:12, color:"#9196a8" }}>{typeof a.reconstruction_error === "number" ? a.reconstruction_error.toFixed(6) : "—"}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Footer actions */}
+                  <div style={{ display:"flex", gap:10, justifyContent:"flex-end" }}>
+                    <button onClick={() => { setShowReport(false); navigate("/alerts"); }} style={{ background:"#f4f6fb", color:"#4b5060", border:"1px solid #e2e5ef", borderRadius:10, padding:"9px 18px", fontSize:13, fontWeight:500, cursor:"pointer", fontFamily:"inherit" }}>
+                      🔔 View Alerts
+                    </button>
+                    <button onClick={() => { setShowReport(false); navigate("/activity"); }} style={{ background:"#6366f1", color:"#fff", border:"none", borderRadius:10, padding:"9px 18px", fontSize:13, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>
+                      ⚡ Run New Analysis
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div style={{ textAlign:"center", padding:48, color:"#9196a8" }}>No report data available.</div>
+              )}
+            </div>
+          </div>
+        </div>
       )}
 
       <style>{`
         .dash { color:#1e1f2e; font-family:'DM Sans',sans-serif; max-width:1100px; }
 
-        /* header */
-        .dash-header { display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:16px; margin-bottom:32px; }
-        .header-title-row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:4px; }
-        .dash-header h1 { font-size:28px; font-weight:700; margin:0; color:#1e1f2e; letter-spacing:-0.5px; }
+        .dash-header { display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:16px; margin-bottom:28px; }
+        .dash-header h1 { font-size:26px; font-weight:700; margin:0 0 4px; letter-spacing:-0.4px; }
         .dash-header p  { color:#9196a8; font-size:14px; margin:0; }
-        .header-actions { display:flex; gap:10px; align-items:center; }
 
-        /* role pill */
-        .role-pill { display:inline-flex; align-items:center; gap:5px; padding:5px 13px; border-radius:20px; font-size:12px; font-weight:700; letter-spacing:0.3px; border:1.5px solid; }
-        .role-pill--caregiver { background:#e0f2fe; color:#0284c7; border-color:#7dd3fc; }
-        .role-pill--doctor    { background:#f3e8ff; color:#7c3aed; border-color:#c4b5fd; }
+        .btn { background:#fff; color:#4b5060; border:1px solid #e2e5ef; border-radius:10px; padding:9px 18px; font-size:14px; font-weight:500; cursor:pointer; font-family:inherit; transition:all .15s; }
+        .btn:hover { background:#f4f6fb; }
+        .btn.primary { background:#6366f1; color:#fff; border-color:transparent; }
+        .btn.primary:hover { background:#4f51d0; }
 
-        .btn-action { background:#fff; color:#4b5060; border:1px solid #e2e5ef; border-radius:10px; padding:9px 18px; font-size:14px; font-weight:500; cursor:pointer; font-family:inherit; transition:all .15s; }
-        .btn-action:hover { background:#f4f6fb; border-color:#c2c6d4; }
-        .btn-action.primary { background:#6366f1; color:#fff; border-color:transparent; }
-        .btn-action.primary:hover { background:#4f51d0; }
         .alert-error { background:#fef2f2; border:1px solid #fecaca; color:#ef4444; padding:12px 16px; border-radius:10px; font-size:13px; margin-bottom:24px; }
-        .stats-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:14px; margin-bottom:24px; }
-        .stat-card { background:#fff; border:1px solid #e8eaf0; border-radius:14px; padding:20px; display:flex; align-items:center; gap:14px; box-shadow:0 1px 4px rgba(0,0,0,0.04); transition:box-shadow .15s; }
-        .stat-card:hover { box-shadow:0 4px 16px rgba(99,102,241,0.08); }
-        .stat-icon  { font-size:26px; }
-        .stat-value { font-size:28px; font-weight:700; letter-spacing:-1px; }
-        .stat-label { font-size:12px; color:#9196a8; margin-top:2px; text-transform:uppercase; letter-spacing:0.5px; }
-        .bottom-grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:20px; }
-        @media (max-width:768px) { .bottom-grid { grid-template-columns:1fr; } }
-        .card { background:#fff; border:1px solid #e8eaf0; border-radius:16px; padding:24px; box-shadow:0 1px 4px rgba(0,0,0,0.04); }
-        .card h2 { font-size:15px; font-weight:600; margin:0 0 18px; color:#2d3048; }
-        .latest-analysis { display:flex; flex-direction:column; gap:10px; }
-        .latest-row { display:flex; justify-content:space-between; align-items:center; font-size:13px; border-bottom:1px solid #f4f5f9; padding-bottom:8px; }
-        .latest-row:last-of-type { border-bottom:none; }
-        .latest-label { color:#9196a8; }
-        .latest-val   { color:#1e1f2e; font-weight:500; }
-        .pipeline-badge { background:rgba(99,102,241,0.1); color:#6366f1; border-radius:6px; padding:2px 10px; font-size:12px; font-weight:600; }
-        .btn-goto { margin-top:12px; background:none; border:1px solid #e2e5ef; color:#9196a8; border-radius:8px; padding:8px 14px; font-size:13px; cursor:pointer; font-family:inherit; transition:all .15s; text-align:left; width:100%; }
-        .btn-goto:hover { border-color:#6366f1; color:#6366f1; background:#f4f4fe; }
-        .anomaly-list { display:flex; flex-direction:column; gap:14px; }
-        .anomaly-item { display:flex; align-items:flex-start; gap:12px; }
-        .anomaly-dot  { width:8px; height:8px; border-radius:50%; margin-top:5px; flex-shrink:0; }
-        .anomaly-body { flex:1; }
-        .anomaly-top  { display:flex; justify-content:space-between; align-items:center; margin-bottom:3px; }
-        .anomaly-date { font-size:13px; font-weight:600; color:#1e1f2e; }
-        .anomaly-type-badge { font-size:11px; font-weight:600; border-radius:5px; padding:2px 8px; }
-        .anomaly-meta { font-size:12px; color:#9196a8; margin-bottom:6px; }
 
-        /* caregiver action buttons */
-        .anomaly-actions { display:flex; gap:6px; flex-wrap:wrap; }
-        .act-btn { padding:4px 11px; border-radius:6px; border:1.5px solid; font-size:11px; font-weight:600; cursor:pointer; transition:all .15s; font-family:inherit; white-space:nowrap; background:transparent; }
+        .stat-row { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:20px; }
+        .stat-card { background:#fff; border:1px solid #e8eaf0; border-radius:14px; padding:18px 20px; box-shadow:0 1px 4px rgba(0,0,0,0.04); }
+        .stat-label { font-size:12px; color:#9196a8; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; }
+        .stat-val   { font-size:28px; font-weight:700; letter-spacing:-1px; }
+
+        .overview-card { background:#fff; border:1px solid #e8eaf0; border-radius:14px; padding:20px 24px; margin-bottom:20px; box-shadow:0 1px 4px rgba(0,0,0,0.04); }
+        .card-title { font-size:14px; font-weight:600; color:#2d3048; margin-bottom:14px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+        .donut-sub  { font-size:11px; color:#9196a8; font-weight:400; }
+        .last-check-row { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; }
+        .check-info { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+        .home-badge  { background:#f4f6fb; border:1px solid #e2e5ef; border-radius:8px; padding:7px 14px; font-size:13px; font-weight:500; }
+        .status-ok   { color:#10b981; font-size:14px; font-weight:600; }
+        .status-warn { color:#ef4444; font-size:14px; font-weight:600; }
+        .check-meta  { font-size:12px; color:#9196a8; margin-top:3px; }
+
+        .main-grid { display:grid; grid-template-columns:240px 1fr; gap:16px; margin-bottom:16px; }
+        @media (max-width:768px) { .main-grid { grid-template-columns:1fr; } .charts-row { grid-template-columns:1fr !important; } }
+
+        .card { background:#fff; border:1px solid #e8eaf0; border-radius:16px; padding:22px; box-shadow:0 1px 4px rgba(0,0,0,0.04); margin-bottom:16px; }
+
+        .donut-wrap   { display:flex; flex-direction:column; align-items:center; gap:16px; }
+        .donut-legend { width:100%; display:flex; flex-direction:column; gap:8px; }
+        .leg-row  { display:flex; align-items:center; justify-content:space-between; font-size:13px; }
+        .leg-dot  { width:9px; height:9px; border-radius:50%; display:inline-block; margin-right:7px; flex-shrink:0; }
+        .leg-divider { border-top:1px solid #f1f2f6; margin-top:8px; padding-top:8px; }
+        .muted { color:#9196a8; font-size:12px; }
+
+        .alerts-list  { display:flex; flex-direction:column; gap:8px; max-height:440px; overflow-y:auto; padding-right:2px; }
+        .alert-item   { border:1px solid #e8eaf0; border-radius:12px; overflow:hidden; flex-shrink:0; }
+        .alert-header { display:flex; align-items:center; gap:10px; padding:12px 14px; cursor:pointer; transition:background .12s; }
+        .alert-header:hover { background:#f8f9fc; }
+        .alert-dot    { width:9px; height:9px; border-radius:50%; flex-shrink:0; }
+        .alert-main   { flex:1; min-width:0; }
+        .alert-title  { font-size:13px; font-weight:600; color:#1e1f2e; margin-bottom:2px; }
+        .alert-sub    { font-size:12px; color:#9196a8; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .alert-date   { font-size:11px; color:#b0b5c4; white-space:nowrap; margin-left:6px; }
+        .alert-chevron { font-size:10px; color:#b0b5c4; margin-left:6px; transition:transform .2s; display:inline-block; }
+        .alert-chevron.open { transform:rotate(180deg); }
+
+        .alert-detail    { border-top:1px solid #f1f2f6; padding:14px; background:#fafbfd; }
+        .detail-grid     { display:grid; grid-template-columns:1fr 1fr; gap:10px 20px; margin-bottom:12px; }
+        .detail-item label { font-size:10px; color:#b0b5c4; text-transform:uppercase; letter-spacing:0.4px; display:block; margin-bottom:3px; }
+        .detail-item span  { font-size:13px; color:#1e1f2e; font-weight:500; }
+        .suggestion-box    { background:#fff; border:1px solid #e8eaf0; border-radius:8px; padding:10px 12px; font-size:13px; color:#4b5060; margin-bottom:12px; }
+        .suggestion-label  { font-size:10px; color:#b0b5c4; text-transform:uppercase; letter-spacing:0.4px; display:block; margin-bottom:4px; }
+
+        .detail-actions { display:flex; gap:8px; flex-wrap:wrap; }
+        .act-btn { padding:6px 14px; border-radius:8px; border:1.5px solid; font-size:12px; font-weight:600; cursor:pointer; transition:all .15s; font-family:inherit; background:transparent; }
         .act-btn:disabled { opacity:.55; cursor:not-allowed; }
-        .act-doctor { border-color:#8b5cf6; color:#8b5cf6; background:#f5f3ff; }
-        .act-doctor:hover:not(:disabled) { background:#8b5cf6; color:#fff; }
-        .act-family { border-color:#0ea5e9; color:#0ea5e9; background:#e0f2fe; }
-        .act-family:hover:not(:disabled) { background:#0ea5e9; color:#fff; }
-        .act-btn.sent { border-color:#22c55e !important; color:#22c55e !important; background:#f0fdf4 !important; }
+        .act-btn.doctor { border-color:#a78bfa; color:#7c3aed; background:#f5f3ff; }
+        .act-btn.doctor:hover:not(:disabled) { background:#7c3aed; color:#fff; }
+        .act-btn.family { border-color:#7dd3fc; color:#0369a1; background:#e0f2fe; }
+        .act-btn.family:hover:not(:disabled) { background:#0369a1; color:#fff; }
+        .act-btn.sent   { border-color:#6ee7b7 !important; color:#065f46 !important; background:#ecfdf5 !important; }
 
-        .actions-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; }
-        .action-card { display:flex; align-items:center; gap:14px; background:#f8f9fc; border:1px solid #e8eaf0; border-radius:12px; padding:16px; cursor:pointer; transition:all .15s; }
-        .action-card:hover { background:#eeeffa; border-color:#c5c7f0; transform:translateY(-1px); box-shadow:0 4px 12px rgba(99,102,241,0.08); }
-        .action-icon  { font-size:24px; }
-        .action-label { font-size:14px; font-weight:600; color:#1e1f2e; margin-bottom:2px; }
-        .action-sub   { font-size:12px; color:#9196a8; }
+        .actions-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; }
+        .action-card  { display:flex; align-items:center; gap:12px; background:#f8f9fc; border:1px solid #e8eaf0; border-radius:12px; padding:14px; cursor:pointer; transition:all .15s; }
+        .action-card:hover { background:#eef0fb; border-color:#c5c7f0; transform:translateY(-1px); }
+        .action-icon  { font-size:22px; }
+        .action-label { font-size:13px; font-weight:600; color:#1e1f2e; margin-bottom:2px; }
+        .action-sub   { font-size:11px; color:#9196a8; }
+
+        .empty-state { text-align:center; padding:32px 0; color:#b0b5c4; font-size:13px; }
         .loading { display:flex; flex-direction:column; align-items:center; padding:80px 0; gap:16px; color:#9196a8; }
-        .spinner { width:36px; height:36px; border:3px solid #e8eaf0; border-top-color:#6366f1; border-radius:50%; animation:spin 0.8s linear infinite; }
+        .spinner { width:34px; height:34px; border:3px solid #e8eaf0; border-top-color:#6366f1; border-radius:50%; animation:spin 0.8s linear infinite; }
         @keyframes spin { to { transform:rotate(360deg); } }
-        .empty-state { text-align:center; padding:24px 0; color:#b0b5c4; font-size:14px; }
-        .empty-state p { margin:0 0 16px; }
       `}</style>
     </div>
   );

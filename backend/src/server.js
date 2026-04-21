@@ -13,8 +13,6 @@ const dashboardRoutes       = require("./routes/dashboard");
 const messagesRouter        = require("./routes/messages");
 const alertsRouter          = require("./routes/alerts");
 const interpretationsRouter = require("./routes/interpretations");
-const emailRoutes           = require("./routes/email");
-const adminRoutes           = require("./routes/adminRoutes");
 
 // ── Models ────────────────────────────────────────────────────────────────────
 const { createUsersTable }           = require("./models/User");
@@ -30,7 +28,7 @@ const Interpretation                 = require("./models/Interpretation");
 const app = express();
 
 app.use(cors({
-  origin:      process.env.FRONTEND_URL || "http://localhost:5173",
+  origin: process.env.FRONTEND_URL || "http://localhost:5173",
   credentials: true,
 }));
 app.use(express.json());
@@ -44,33 +42,31 @@ app.use("/dashboard",       dashboardRoutes);
 app.use("/messages",        messagesRouter);
 app.use("/alerts",          alertsRouter);
 app.use("/interpretations", interpretationsRouter);
-app.use("/api",             emailRoutes);
-app.use("/admin",           adminRoutes);
 
 // ── Health check ──────────────────────────────────────────────────────────────
-app.get("/", (req, res) => res.json({ status: "ok", service: "ElderGuard API" }));
+app.get("/", (req, res) => res.json({ status: "ok" }));
 
 // ── Init DB → Start server ────────────────────────────────────────────────────
 const PORT = process.env.PORT || 8000;
 
 const start = async () => {
+  // Core tables first (foreign key order matters)
   await createUsersTable();
   await createHomesTable();
   await createHomeContactsTable();
   await createDatasetsTable();
   await createAnalysisResultsTable();
+
+  // New feature tables
   await Message.createTable();
   await Alert.createTable();
   await Interpretation.createTable();
 
   app.listen(PORT, () => {
-    console.log(`🚀 ElderGuard API running on http://localhost:${PORT}`);
+    console.log(`🚀 Server running on http://localhost:${PORT}`);
   });
 };
 
-start().catch((err) => {
-  console.error("❌ Failed to start server:", err.message);
-  process.exit(1);
-});
+start();
 
 module.exports = app;

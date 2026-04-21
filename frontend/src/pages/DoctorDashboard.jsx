@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from "react";
+import { useLocation } from "react-router-dom";
 import { authService } from "../services/api";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:8000";
@@ -146,13 +147,17 @@ function MessageThread({ resultId, user }) {
 }
 
 export default function DoctorDashboard() {
+  const { pathname } = useLocation();
+  // If accessed via /doctor/messages, open the messages tab by default
+  const defaultTab = pathname.includes("messages") ? "messages" : "anomalies";
+
   const [results, setResults]   = useState([]);
   const [selected, setSelected] = useState(null);
   const [interps, setInterps]   = useState([]);
   const [form, setForm]         = useState({ anomaly_index: 0, diagnosis: "", solution: "" });
   const [saving, setSaving]     = useState(false);
   const [loading, setLoading]   = useState(true);
-  const [tab, setTab]           = useState("anomalies");
+  const [tab, setTab]           = useState(defaultTab);
   const [error, setError]       = useState("");
 
   const user = authService.getUser?.() || {};

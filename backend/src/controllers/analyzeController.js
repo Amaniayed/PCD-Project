@@ -2,7 +2,8 @@ const { spawn } = require("child_process");
 const path       = require("path");
 const fs         = require("fs");
 const { saveResult, getAllResultsForDoctor } = require("../models/AnalysisResult");
-const pool = require("../config/db");
+const pool  = require("../config/db");
+const Alert = require("../models/Alert");
 
 const PROJECT_ROOT  = path.resolve(__dirname, "..", "..", "..");
 const PYTHON_SCRIPT = path.join(PROJECT_ROOT, "src", "evaluation", "detect_anomalies_api.py");
@@ -162,9 +163,10 @@ const analyzeDataset = (req, res) => {
       const result = JSON.parse(jsonLine);
       if (result.error) return res.status(400).json({ detail: result.error });
 
-      // ── Save to DB ────────────────────────────────────────
+      // ── Save result to DB ─────────────────────────────────
+      let savedResult = null;
       try {
-        await saveResult({
+        savedResult = await saveResult({
           dataset_id:      dataset.id,
           home_id:         dataset.home_id,
           user_id:         req.user.id,
@@ -175,9 +177,37 @@ const analyzeDataset = (req, res) => {
           type_counts:     result.type_counts,
           anomalies:       result.anomalies,
         });
-        console.log("[analyze] Result saved to DB");
+        console.log("[analyze] Result saved to DB, id:", savedResult?.id);
       } catch (dbErr) {
         console.error("[analyze] DB save failed (non-fatal):", dbErr.message);
+      }
+
+      // ── Create alert when anomalies found ─────────────────
+      if (result.total_anomalies > 0) {
+        try {
+          // dataset object already has home_id and file_name from route middleware
+          const homeName = dataset.home_name || (await pool.query(
+            "SELECT name FROM homes WHERE id = $1", [dataset.home_id]
+          ).then(r => r.rows[0]?.name)) || "Unknown Home";
+
+          const fileName = dataset.file_name || "—";
+
+          await Alert.create({
+            user_id:            req.user.id,
+            home_id:            dataset.home_id,
+            analysis_result_id: savedResult?.id || null,
+            home_name:          homeName,
+            file_name:          fileName,
+            pipeline:           "REFIT",
+            anomaly_count:      result.total_anomalies,
+            total_days:         result.total_days,
+            type_counts:        result.type_counts  || {},
+            anomalies:          result.anomalies    || [],
+          });
+          console.log(`[analyze] Alert created — ${result.total_anomalies} anomalies for ${homeName}`);
+        } catch (alertErr) {
+          console.error("[analyze] Alert creation failed (non-fatal):", alertErr.message);
+        }
       }
 
       console.log(`[analyze] Done — ${result.total_days} days, ${result.total_anomalies} anomalies`);
