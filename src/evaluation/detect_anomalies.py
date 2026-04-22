@@ -190,12 +190,10 @@ def main():
     # ─────────────────────────────────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(10, 4))
     ax.hist(test_mse, bins=50, color="#4C72B0", alpha=0.75, edgecolor="white",
-            label="Reconstruction errors (test days)")
-    ax.axvline(threshold, color="red", linewidth=2, linestyle="--",
-               label=f"Threshold = {threshold:.4f}  (k={best_k})")
-    ax.set_xlabel("MSE par jour")
-    ax.set_ylabel("Nombre de jours")
-    ax.set_title("Distribution des erreurs de reconstruction ( Classic Autoencoder ) — TEST", fontweight="bold")
+            label="Reconstruction errors ")
+    ax.set_xlabel("MSE per day")
+    ax.set_ylabel("Number of days")
+    ax.set_title("Reconstruction Error Distribution — Classic Autoencoder", fontweight="bold")
     ax.legend()
     ax.grid(alpha=0.3)
     plt.tight_layout()
