@@ -38,7 +38,7 @@ function resolveProcessedCsv(houseId) {
 function resolveValPath(houseId) {
   const specific = path.join(VAL_DIR, `lstm_refit_house${houseId}_validation.csv`);
   if (fs.existsSync(specific)) return specific;
-  if (fs.existsSync(VAL_DIR))  return VAL_DIR;   // script handles directory lookup
+  if (fs.existsSync(VAL_DIR))  return VAL_DIR;
   return null;
 }
 
@@ -46,7 +46,7 @@ function resolveValPath(houseId) {
 const resolveDataset = async (req, res, next) => {
   try {
     const { rows } = await db.query(
-      `SELECT d.*, h.user_id
+      `SELECT d.*, h.user_id, h.name AS home_name
        FROM datasets d
        JOIN homes h ON h.id = d.home_id
        WHERE d.id = $1`,
@@ -54,9 +54,16 @@ const resolveDataset = async (req, res, next) => {
     );
     if (!rows.length) return res.status(404).json({ detail: "Dataset not found." });
 
-    const dataset = rows[0];
-    if (dataset.user_id !== req.user.id && req.user.role !== 'admin')
+    const dataset       = rows[0];
+    const reqUserId     = Number(req.user.id);       // ✅ convert JWT string → number
+    const datasetUserId = Number(dataset.user_id);   // ✅ ensure number
+
+    console.log(`[auth] req.user.id=${reqUserId}, dataset.user_id=${datasetUserId}, role=${req.user.role}`);
+
+    // ✅ FIXED: use Number() comparison, allow doctor role too
+    if (datasetUserId !== reqUserId && req.user.role !== "admin" && req.user.role !== "doctor") {
       return res.status(403).json({ detail: "Not authorised to analyse this dataset." });
+    }
 
     req.dataset         = dataset;
     req.datasetFilePath = dataset.file_path || dataset.file_name;
@@ -67,17 +74,15 @@ const resolveDataset = async (req, res, next) => {
   }
 };
 
-// ── Handler ───────────────────────────────────────────────────────────────────
+// ── Analysis handler ──────────────────────────────────────────────────────────
 const runAnalysis = (req, res) => {
   const filePath = req.datasetFilePath;
   const dataset  = req.dataset;
   const houseId  = dataset.house_id || 2;
 
-  // ── Validate file exists ──────────────────────────────────
   if (!fs.existsSync(filePath))
     return res.status(404).json({ detail: `CSV not found: ${filePath}` });
 
-  // ── Validate models dir has at least one LSTM model ───────
   const lstmModels = [
     `autoencoder_lstm_refit_house${houseId}_best.pth`,
     "autoencoder_lstm_refit_house1_best.pth",
@@ -91,7 +96,6 @@ const runAnalysis = (req, res) => {
       hint:   "Train with inject_and_detectrefit_lstm.py first.",
     });
 
-  // ── Resolve processed CSV (for scaler) ────────────────────
   const processedCsv = resolveProcessedCsv(houseId);
   if (!processedCsv)
     return res.status(503).json({
@@ -99,13 +103,10 @@ const runAnalysis = (req, res) => {
       hint:   `Expected processed_refit_house${houseId}.csv in data/processed/`,
     });
 
-  // ── Resolve validation path ────────────────────────────────
   const valPath = resolveValPath(houseId);
   if (!valPath)
     return res.status(503).json({ detail: "Validation data not found." });
 
-  // ── Spawn Python ───────────────────────────────────────────
-  // detect_anomalies_api.py <csv> <models_dir> <val_path> <processed_csv> <house_id>
   const args = [PYTHON_SCRIPT, filePath, MODELS_DIR, valPath, processedCsv, String(houseId)];
 
   console.log(`[analyze] Python     : ${PYTHON_BIN}`);
@@ -160,7 +161,7 @@ const runAnalysis = (req, res) => {
           ]
         );
         savedResultId = resRows[0]?.id;
-        console.log("[analyze] Result saved to DB");
+        console.log("[analyze] Result saved to DB, id:", savedResultId);
       } catch (dbErr) {
         console.error("[analyze] DB save (non-fatal):", dbErr.message);
       }
@@ -168,15 +169,8 @@ const runAnalysis = (req, res) => {
       // ── Create alert when anomalies found (non-fatal) ──────
       if (result.total_anomalies > 0) {
         try {
-          const { rows: homeRows } = await db.query(
-            `SELECT h.name, d.file_name
-             FROM datasets d
-             JOIN homes h ON h.id = d.home_id
-             WHERE d.id = $1`,
-            [dataset.id]
-          );
-          const homeName = homeRows[0]?.name      || "Unknown Home";
-          const fileName = homeRows[0]?.file_name || "—";
+          const homeName = dataset.home_name || "Unknown Home";
+          const fileName = dataset.file_name || "—";
 
           await db.query(
             `INSERT INTO alerts
@@ -213,6 +207,7 @@ const runAnalysis = (req, res) => {
       });
     }
   });
+
   py.on("error", (err) => {
     console.error("[analyze] Cannot spawn Python:", err.message);
     return res.status(500).json({
@@ -221,25 +216,35 @@ const runAnalysis = (req, res) => {
   });
 };
 
-// ── GET /analyze/results ─────────────────────────────────────────────────────
-const getResults = async (req, res) => {
-  try {
-    // If admin, show all. If doctor, show patients. If caregiver, show own.
-    let query = `
-      SELECT ar.*, d.file_name, h.name AS home_name
-      FROM analysis_results ar
-      JOIN datasets d ON d.id = ar.dataset_id
-      JOIN homes    h ON h.id = d.home_id
-    `;
-    let params = [];
+// ── Routes — GET routes MUST come before POST /:datasetId ────────────────────
 
-    if (req.user.role === 'admin') {
-      query += ` ORDER BY ar.analyzed_at DESC`;
-    } else if (req.user.role === 'doctor') {
-      query += ` WHERE h.doctor_id = $1 ORDER BY ar.analyzed_at DESC`;
+// GET /analyze/results
+router.get("/results", protect, async (req, res) => {
+  try {
+    let query, params;
+
+    if (req.user.role === "doctor") {
+      query = `
+        SELECT DISTINCT ON (ar.id) ar.*, d.file_name, h.name AS home_name
+        FROM analysis_results ar
+        JOIN datasets d ON d.id = ar.dataset_id
+        JOIN homes    h ON h.id = d.home_id
+        LEFT JOIN home_contacts hc ON hc.home_id = h.id AND hc.type = 'doctor'
+        LEFT JOIN users         u  ON u.email = hc.email
+        WHERE u.id = $1
+           OR NOT EXISTS (
+             SELECT 1 FROM home_contacts WHERE home_id = h.id AND type = 'doctor'
+           )
+        ORDER BY ar.id DESC, ar.analyzed_at DESC`;
       params = [req.user.id];
     } else {
-      query += ` WHERE ar.user_id = $1 ORDER BY ar.analyzed_at DESC`;
+      query = `
+        SELECT ar.*, d.file_name, h.name AS home_name
+        FROM analysis_results ar
+        JOIN datasets d ON d.id = ar.dataset_id
+        JOIN homes    h ON h.id = d.home_id
+        WHERE ar.user_id = $1
+        ORDER BY ar.analyzed_at DESC`;
       params = [req.user.id];
     }
 
@@ -247,12 +252,12 @@ const getResults = async (req, res) => {
     return res.json(rows);
   } catch (err) {
     console.error("[analyze] getResults:", err.message);
-    return res.status(500).json({ detail: "Failed to fetch results." });
+    return res.status(500).json({ detail: "Failed to fetch results.", error: err.message });
   }
-};
+});
 
-// ── GET /analyze/doctor/overview ──────────────────────────────────────────────
-const getDoctorOverview = async (req, res) => {
+// GET /analyze/doctor/overview
+router.get("/doctor/overview", protect, async (req, res) => {
   try {
     const { rows } = await db.query(
       `SELECT ar.*, d.file_name, h.name AS home_name, u.name AS caregiver_name
@@ -267,46 +272,9 @@ const getDoctorOverview = async (req, res) => {
     console.error("[analyze] getDoctorOverview:", err.message);
     return res.status(500).json({ detail: "Failed to fetch doctor overview." });
   }
-};
-
-// ── Routes ────────────────────────────────────────────────────────────────────
-//router.get("/results",         protect, getResults);
-//router.get("/doctor/overview", protect, getDoctorOverview);
-//router.post("/:datasetId",     protect, resolveDataset, runAnalysis);
-// Add these GET routes BEFORE the POST /:datasetId route
-router.get("/results", protect, async (req, res) => {
-  try {
-    const { rows } = await db.query(
-      `SELECT ar.*, d.file_name, h.name AS home_name
-       FROM analysis_results ar
-       JOIN datasets d ON d.id = ar.dataset_id
-       JOIN homes    h ON h.id = d.home_id
-       ORDER BY ar.analyzed_at DESC`
-    );
-    return res.json(rows);
-  } catch (err) {
-    return res.status(500).json({ detail: "Failed to fetch results." });
-  }
 });
 
-router.get("/doctor/overview", protect, async (req, res) => {
-  try {
-    const { rows } = await db.query(
-      `SELECT ar.*, d.file_name, h.name AS home_name, u.name AS caregiver_name
-       FROM analysis_results ar
-       JOIN datasets d ON d.id = ar.dataset_id
-       JOIN homes    h ON h.id = d.home_id
-       JOIN users    u ON u.id = ar.user_id
-       ORDER BY ar.analyzed_at DESC`
-    );
-    return res.json(rows);
-  } catch (err) {
-    return res.status(500).json({ detail: "Failed to fetch doctor overview." });
-  }
-});
-
-// POST must come LAST
+// POST /analyze/:datasetId — MUST be last
 router.post("/:datasetId", protect, resolveDataset, runAnalysis);
-router.get("/doctor/overview", protect, getDoctorOverview);
-router.get("/results",         protect, getResults);
+
 module.exports = router;

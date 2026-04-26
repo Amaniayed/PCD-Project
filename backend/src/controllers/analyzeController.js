@@ -30,14 +30,10 @@ function resolvePythonBin() {
 
 const PYTHON_BIN = resolvePythonBin();
 
-/**
- * Resolve which processed CSV to use as the scaler source.
- * Tries house-specific files first, then falls back to generic processed files.
- */
 function resolveProcessedCsv(houseId) {
   const candidates = [
     path.join(PROCESSED_DIR, `processed_refit_house${houseId}.csv`),
-    path.join(PROCESSED_DIR, `processed_refit_house2.csv`),   // default house
+    path.join(PROCESSED_DIR, `processed_refit_house2.csv`),
     path.join(PROCESSED_DIR, `processed_refit_house1.csv`),
     path.join(PROCESSED_DIR, `processed_full_year_dataset.csv`),
   ];
@@ -47,24 +43,13 @@ function resolveProcessedCsv(houseId) {
   return null;
 }
 
-/**
- * Resolve validation CSV path.
- * Returns the VAL_DIR (the Python script will look inside it for the right file)
- * or a specific validation file if found.
- */
 function resolveValPath(houseId) {
   const specific = path.join(VAL_DIR, `lstm_refit_house${houseId}_validation.csv`);
   if (fs.existsSync(specific)) return specific;
-
-  // Fallback: pass the whole VAL_DIR — script handles the lookup
   if (fs.existsSync(VAL_DIR)) return VAL_DIR;
-
   return null;
 }
 
-/**
- * Check that at least one LSTM model exists in models_dir.
- */
 function hasAnyLstmModel() {
   if (!fs.existsSync(MODELS_DIR)) return false;
   const lstmNames = [
@@ -83,7 +68,6 @@ const analyzeDataset = (req, res) => {
   const filePath = req.datasetFilePath;
   const dataset  = req.dataset;
 
-  // ── Check LSTM model availability ─────────────────────────
   if (!hasAnyLstmModel()) {
     const found = fs.existsSync(MODELS_DIR)
       ? fs.readdirSync(MODELS_DIR).filter((f) => f.endsWith(".pth"))
@@ -100,10 +84,8 @@ const analyzeDataset = (req, res) => {
     return res.status(404).json({ detail: "CSV file not found on disk." });
   }
 
-  // ── Resolve house ID from dataset metadata (default 2) ────
   const houseId = dataset.house_id || 2;
 
-  // ── Resolve paths ─────────────────────────────────────────
   const processedCsv = resolveProcessedCsv(houseId);
   if (!processedCsv) {
     return res.status(503).json({
@@ -120,8 +102,6 @@ const analyzeDataset = (req, res) => {
     });
   }
 
-  // ── Build Python args ─────────────────────────────────────
-  // detect_anomalies_api.py <csv> <models_dir> <val_path> <processed_csv> [house_id]
   const args = [
     PYTHON_SCRIPT,
     filePath,
@@ -185,7 +165,6 @@ const analyzeDataset = (req, res) => {
       // ── Create alert when anomalies found ─────────────────
       if (result.total_anomalies > 0) {
         try {
-          // dataset object already has home_id and file_name from route middleware
           const homeName = dataset.home_name || (await pool.query(
             "SELECT name FROM homes WHERE id = $1", [dataset.home_id]
           ).then(r => r.rows[0]?.name)) || "Unknown Home";
@@ -245,7 +224,7 @@ const getDoctorOverview = async (req, res) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GET /analyze/results
+// GET /analyze/results  ← FIXED: filter by user_id
 // ─────────────────────────────────────────────────────────────────────────────
 const getResults = async (req, res) => {
   try {
@@ -254,7 +233,9 @@ const getResults = async (req, res) => {
        FROM analysis_results ar
        JOIN datasets d ON d.id = ar.dataset_id
        JOIN homes    h ON h.id = d.home_id
-       ORDER BY ar.analyzed_at DESC`
+       WHERE ar.user_id = $1
+       ORDER BY ar.analyzed_at DESC`,
+      [req.user.id]
     );
     return res.json(rows);
   } catch (err) {

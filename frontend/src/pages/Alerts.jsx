@@ -1,9 +1,14 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { authService } from "../services/api";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:8000";
 const h  = () => ({ Authorization: `Bearer ${authService.getToken()}` });
 const hj = () => ({ ...h(), "Content-Type": "application/json" });
+
+// ── Safely parse JSONB that may arrive as a string ────────
+const safeArray  = (val) => { try { const p = typeof val === "string" ? JSON.parse(val) : val; return Array.isArray(p) ? p : []; } catch { return []; } };
+const safeObject = (val) => { try { const p = typeof val === "string" ? JSON.parse(val) : val; return p && typeof p === "object" && !Array.isArray(p) ? p : {}; } catch { return {}; } };
 
 // ── Friendly caregiver-facing language ────────────────────
 const TYPE_META = {
@@ -42,7 +47,7 @@ function severity(count, total) {
   return           { label: "Minor variation",  color: "#10b981", bg: "#ecfdf5", border: "#a7f3d0" };
 }
 
-// ── Donut (caregiver-friendly colors) ─────────────────────
+// ── Donut chart ────────────────────────────────────────────
 function DonutChart({ typeCounts }) {
   const entries = Object.entries(typeCounts || {});
   const total   = entries.reduce((s, [, v]) => s + v, 0);
@@ -72,8 +77,8 @@ function DonutChart({ typeCounts }) {
 
 // ── Detail panel ──────────────────────────────────────────
 function DetailPanel({ alert }) {
-  const typeCounts = alert.type_counts || {};
-  const anomalies  = Array.isArray(alert.anomalies) ? alert.anomalies : [];
+  const typeCounts = safeObject(alert.type_counts);
+  const anomalies  = safeArray(alert.anomalies);
   const total      = alert.total_days || 0;
   const sev        = severity(alert.anomaly_count, total);
   const [filter, setFilter] = useState("all");
@@ -82,12 +87,12 @@ function DetailPanel({ alert }) {
   return (
     <div style={{ borderTop: "1px solid #e8eaf0", background: "#f8f9fc", padding: "20px 24px", display: "flex", flexDirection: "column", gap: 18 }}>
 
-      {/* Summary stats — caregiver friendly */}
+      {/* Summary stats */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
         {[
-          { label: "Days monitored",  value: total,                                              icon: "📅", color: "#6366f1" },
-          { label: "Unusual days",    value: alert.anomaly_count,                                icon: "⚠️", color: "#ef4444" },
-          { label: "Normal days",     value: Math.max(0, total - alert.anomaly_count),           icon: "✅", color: "#10b981" },
+          { label: "Days monitored",  value: total,                                    icon: "📅", color: "#6366f1" },
+          { label: "Unusual days",    value: alert.anomaly_count,                      icon: "⚠️", color: "#ef4444" },
+          { label: "Normal days",     value: Math.max(0, total - alert.anomaly_count), icon: "✅", color: "#10b981" },
         ].map(({ label, value, icon, color }) => (
           <div key={label} style={{ background: "#fff", border: "1px solid #e8eaf0", borderRadius: 12, padding: "14px 16px", textAlign: "center" }}>
             <div style={{ fontSize: 22, marginBottom: 6 }}>{icon}</div>
@@ -108,7 +113,7 @@ function DetailPanel({ alert }) {
         </div>
       </div>
 
-      {/* Type breakdown — friendly names */}
+      {/* Type breakdown */}
       {Object.keys(typeCounts).length > 0 && (
         <div style={{ background: "#fff", border: "1px solid #e8eaf0", borderRadius: 12, padding: "16px 20px" }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: "#374151", marginBottom: 14 }}>What was detected</div>
@@ -141,7 +146,7 @@ function DetailPanel({ alert }) {
         </div>
       )}
 
-      {/* Anomaly log — simplified, no reconstruction error */}
+      {/* Anomaly log */}
       {anomalies.length > 0 && (
         <div style={{ background: "#fff", border: "1px solid #e8eaf0", borderRadius: 12, padding: "16px 20px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
@@ -163,7 +168,6 @@ function DetailPanel({ alert }) {
           </div>
 
           <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 300, overflowY: "auto" }}>
-            {/* Header */}
             <div style={{ display: "grid", gridTemplateColumns: "90px 1fr 1fr", gap: 12, padding: "6px 14px", fontSize: 10, fontWeight: 700, color: "#b0b5c4", textTransform: "uppercase", letterSpacing: "0.5px" }}>
               <span>Date</span><span>Type of change</span><span>Description</span>
             </div>
@@ -195,6 +199,7 @@ function DetailPanel({ alert }) {
 // MAIN PAGE
 // ══════════════════════════════════════════════════════════
 export default function Alerts() {
+  const navigate = useNavigate();
   const [alerts,      setAlerts]      = useState([]);
   const [loading,     setLoading]     = useState(true);
   const [refreshing,  setRefreshing]  = useState(false);
@@ -205,13 +210,50 @@ export default function Alerts() {
     if (!silent) setLoading(true);
     else setRefreshing(true);
     try {
+      // ── 1. Fetch from alerts table (user's own alerts) ────
       const r    = await fetch(`${API}/alerts`, { headers: h() });
       const data = await r.json();
-      setAlerts(
-        (Array.isArray(data) ? data : []).sort(
-          (a, b) => new Date(b.created_at) - new Date(a.created_at)
-        )
+      const alertsList = (Array.isArray(data) ? data : []).sort(
+        (a, b) => new Date(b.created_at) - new Date(a.created_at)
       );
+
+      // ── 2. Fetch from analysis_results (catches any that
+      //       didn't generate an alert row, e.g. old runs) ──
+      const r2   = await fetch(`${API}/analyze/results`, { headers: h() }).catch(() => null);
+      const res2 = r2?.ok ? await r2.json().catch(() => []) : [];
+      const analysisAlerts = (Array.isArray(res2) ? res2 : [])
+        .filter(r => r.total_anomalies > 0)
+        .map(r => ({
+          id:                 `ar-${r.id}`,   // synthetic id to avoid collision
+          user_id:            r.user_id,
+          home_id:            r.home_id,
+          analysis_result_id: r.id,
+          home_name:          r.home_name,
+          file_name:          r.file_name,
+          pipeline:           r.pipeline,
+          anomaly_count:      r.total_anomalies,
+          total_days:         r.total_days,
+          type_counts:        r.type_counts,
+          anomalies:          r.anomalies,
+          is_read:            true,
+          created_at:         r.analyzed_at || r.created_at,
+          _synthetic:         true,
+        }));
+
+      // ── 3. Merge: real alerts first, then any analysis
+      //       results not already covered by a real alert ──
+      const coveredResultIds = new Set(
+        alertsList.map(a => a.analysis_result_id).filter(Boolean)
+      );
+      const extraFromAnalysis = analysisAlerts.filter(
+        a => !coveredResultIds.has(a.analysis_result_id)
+      );
+
+      const merged = [...alertsList, ...extraFromAnalysis].sort(
+        (a, b) => new Date(b.created_at) - new Date(a.created_at)
+      );
+
+      setAlerts(merged);
     } catch {
       if (!silent) setAlerts([]);
     } finally {
@@ -227,6 +269,8 @@ export default function Alerts() {
   }, []);
 
   const markRead = async (id) => {
+    const alert = alerts.find(a => a.id === id);
+    if (alert?._synthetic) return;
     await fetch(`${API}/alerts/${id}/read`, { method: "PATCH", headers: h() });
     setAlerts((prev) => prev.map((a) => (a.id === id ? { ...a, is_read: true } : a)));
   };
@@ -235,23 +279,11 @@ export default function Alerts() {
     setOpenId((prev) => (prev === id ? null : id));
   };
 
-  const handleSendToDoctor = async (alertId) => {
-    setSendState((s) => ({ ...s, [alertId]: "sending" }));
-    try {
-      const res  = await fetch(`${API}/alerts/${alertId}/send-to-doctor`, { method: "POST", headers: hj() });
-      const ct   = res.headers.get("content-type") || "";
-      const data = ct.includes("application/json") ? await res.json() : { detail: `Server error (${res.status})` };
-      if (!res.ok) {
-        window.alert(`❌ ${data.detail || "Failed to send."}`);
-        setSendState((s) => ({ ...s, [alertId]: "error" }));
-      } else {
-        window.alert(`✅ ${data.message}`);
-        setSendState((s) => ({ ...s, [alertId]: "ok" }));
-      }
-    } catch (e) {
-      window.alert(`❌ Network error: ${e.message}`);
-      setSendState((s) => ({ ...s, [alertId]: "error" }));
-    }
+  // ✅ FIXED: navigate to MessageDoctor so the user types their own message
+  const handleSendToDoctor = (alertId) => {
+    const alert = alerts.find(a => a.id === alertId);
+    if (!alert?.analysis_result_id) return;
+    navigate(`/messages?resultId=${alert.analysis_result_id}`);
   };
 
   const unread = alerts.filter((a) => !a.is_read).length;
@@ -304,7 +336,7 @@ export default function Alerts() {
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {alerts.map((a) => {
             const isOpen     = openId === a.id;
-            const typeCounts = a.type_counts || {};
+            const typeCounts = safeObject(a.type_counts);
             const state      = sendState[a.id] || "idle";
             const sev        = severity(a.anomaly_count, a.total_days);
             const date       = new Date(a.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
@@ -328,16 +360,13 @@ export default function Alerts() {
 
                   {/* Main info */}
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    {/* Title row */}
                     <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
                       <span style={{ fontSize: 15, fontWeight: 700, color: a.is_read ? "#374151" : "#1e1f2e" }}>
                         {a.anomaly_count} unusual day{a.anomaly_count !== 1 ? "s" : ""} detected
                       </span>
-                      {/* Severity badge */}
                       <span style={{ background: sev.bg, color: sev.color, border: `1px solid ${sev.border}`, borderRadius: 20, padding: "2px 10px", fontSize: 11, fontWeight: 700 }}>
                         {sev.label === "High concern" ? "🚨" : sev.label === "Worth watching" ? "👀" : "ℹ️"} {sev.label}
                       </span>
-                      {/* Friendly type pills */}
                       {Object.entries(typeCounts).map(([type, count]) => {
                         const m = tm(type);
                         return (
@@ -347,8 +376,6 @@ export default function Alerts() {
                         );
                       })}
                     </div>
-
-                    {/* Meta row — caregiver friendly, NO pipeline */}
                     <div style={{ fontSize: 13, color: "#6b7280", display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
                       <span>🏠 {a.home_name}</span>
                       <span>📅 {a.total_days} days monitored</span>
@@ -360,16 +387,15 @@ export default function Alerts() {
                   <div style={{ display: "flex", gap: 8, flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end" }}>
                     <button
                       onClick={() => handleSendToDoctor(a.id)}
-                      disabled={state === "sending"}
                       style={{
-                        background: state === "ok" ? "#10b981" : state === "error" ? "#ef4444" : state === "sending" ? "rgba(99,102,241,0.5)" : "#6366f1",
+                        background: "#6366f1",
                         color: "#fff", border: "none", borderRadius: 9,
                         padding: "8px 16px", fontSize: 13, fontWeight: 600,
-                        cursor: state === "sending" ? "not-allowed" : "pointer",
+                        cursor: "pointer",
                         fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6, transition: "background 0.2s",
                       }}
                     >
-                      {state === "sending" ? "⏳ Sending…" : state === "ok" ? "✅ Sent!" : state === "error" ? "❌ Retry" : "📩 Notify Doctor"}
+                      📩 Message Doctor
                     </button>
 
                     <button

@@ -111,24 +111,40 @@ export default function Dashboard() {
   const [reportData, setReportData]= useState(null);
   const [reportLoad, setReportLoad]= useState(false);
 
+  const [latestResult, setLatestResult] = useState(null);
+
   useEffect(() => {
     const headers = authHeaders();
     Promise.all([
       fetch(`${API}/dashboard/stats`, { headers }).then(r => r.json()),
       fetch(`${API}/alerts`,          { headers }).then(r => r.json()).catch(() => []),
+      // Also fetch analysis results directly — most reliable source for "last analysis"
+      fetch(`${API}/analyze/results`, { headers }).then(r => r.json()).catch(() => []),
     ])
-      .then(([d, a]) => {
+      .then(([d, a, results]) => {
         if (d.detail) throw new Error(d.detail);
         setData(d);
-        // alerts come back newest-first; take up to 6 unread or recent
         setAlerts(Array.isArray(a) ? a.slice(0, 6) : []);
+
+        // Pick the most recent analysis result for the current user
+        if (Array.isArray(results) && results.length > 0) {
+          // Sort by analyzed_at or created_at descending, take first
+          const sorted = [...results].sort((x, y) => {
+            const da = new Date(x.analyzed_at || x.created_at || 0).getTime();
+            const db = new Date(y.analyzed_at || y.created_at || 0).getTime();
+            return db - da;
+          });
+          setLatestResult(sorted[0]);
+        }
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, []);
 
   const stats  = data?.stats  || {};
-  const latest = data?.latest || null;
+  // Use direct analysis result as the source of truth for "latest";
+  // fall back to what the dashboard/stats endpoint returns
+  const latest = latestResult || data?.latest || null;
   const recent = data?.recentAnomalies || [];
 
   // Build anomaly list from alerts (each alert has an anomalies array)
@@ -334,17 +350,31 @@ export default function Dashboard() {
 
   // Open full report modal — fetch anomaly details for latest analysis
   const openReport = async () => {
-    if (!latest?.id) return;
+    if (!latest) return;
     setShowReport(true);
+    // If we already have full anomaly data from latestResult, use it directly
+    if (latestResult) {
+      const anomalies = safeParseJSON(latestResult.anomalies);
+      const type_counts = typeof latestResult.type_counts === "string"
+        ? JSON.parse(latestResult.type_counts)
+        : (latestResult.type_counts || {});
+      setReportData({ ...latestResult, anomalies, type_counts });
+      return;
+    }
     if (reportData?.id === latest.id) return; // already loaded
     setReportLoad(true);
     try {
       const res = await fetch(`${API}/analyze/results`, { headers: authHeaders() });
       const all = await res.json();
       const found = Array.isArray(all) ? all.find(r => r.id === latest.id) : null;
-      setReportData(found || latest);
+      const raw = found || latest;
+      const anomalies = safeParseJSON(raw.anomalies);
+      const type_counts = typeof raw.type_counts === "string"
+        ? JSON.parse(raw.type_counts)
+        : (raw.type_counts || {});
+      setReportData({ ...raw, anomalies, type_counts });
     } catch {
-      setReportData(latest);
+      setReportData({ ...latest, anomalies: safeParseJSON(latest.anomalies), type_counts: latest.type_counts || {} });
     } finally {
       setReportLoad(false);
     }
@@ -382,7 +412,6 @@ export default function Dashboard() {
               { label: "Homes monitored",     value: stats.total_homes    ?? 0, color: "#6366f1" },
               { label: "Safe days recorded",  value: totalCleanDays,            color: "#10b981" },
               { label: "Days with alerts",    value: totalAlertDays,            color: "#ef4444" },
-              { label: "Check-ups completed", value: stats.total_analyses  ?? 0, color: "#0ea5e9" },
             ].map((s) => (
               <div key={s.label} className="stat-card">
                 <div className="stat-label">{s.label}</div>
@@ -405,7 +434,7 @@ export default function Dashboard() {
                         : "All clear — no unusual activity"}
                     </div>
                     <div className="check-meta">
-                      Checked on {new Date(latest.analyzed_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
+                      Checked on {new Date(latest.analyzed_at || latest.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
                       &nbsp;·&nbsp;{latest.total_days} days analyzed
                     </div>
                   </div>
@@ -423,7 +452,7 @@ export default function Dashboard() {
                 Latest check overview
                 {latest && (
                   <span className="donut-sub">
-                    {latest.home_name} · {new Date(latest.analyzed_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}
+                    {latest.home_name} · {new Date(latest.analyzed_at || latest.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}
                   </span>
                 )}
               </div>

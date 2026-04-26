@@ -64,8 +64,8 @@ const NAV_CAREGIVER = [
 
 const NAV_DOCTOR = [
   { to: "/doctor/dashboard", icon: "◈",  label: "Dashboard"       },
-  /*{ to: "/doctor/review",    icon: "🔍", label: "Review Anomalies" },}*/
-  { to: "/doctor/messages",  icon: "📩", label: "Messages"         },
+  /*{ to: "/doctor/review",    icon: "🔍", label: "Review Anomalies" },}
+  { to: "/doctor/messages",  icon: "📩", label: "Messages"         },*/
 ];
 
 const NAV_ADMIN = [

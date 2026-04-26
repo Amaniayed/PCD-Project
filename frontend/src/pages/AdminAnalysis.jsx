@@ -118,7 +118,7 @@ export default function AdminAnalysis() {
       }}>
         <span style={{ fontSize: 16 }}>🏠</span>
         <span style={{ fontSize: 13, color: "#6366f1", fontWeight: 600 }}>
-         Model — Real Homes
+         Model —  Homes
         </span>
         <span style={{ fontSize: 11, color: "rgba(99,102,241,0.6)", marginLeft: 4 }}>
   

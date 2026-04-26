@@ -14,35 +14,51 @@ const createDatasetsTable = async () => {
   console.log("✅ Datasets table ready");
 };
 
-// Get all datasets for a given home (owned by user)
+// ─── GET datasets for one specific home ───────────────────
 const findAllByHome = async (homeId, userId) => {
   const result = await pool.query(
-    `SELECT d.* FROM datasets d
+    `SELECT d.*, h.name AS home_name
+     FROM datasets d
      JOIN homes h ON h.id = d.home_id
-     WHERE d.home_id = $1 AND h.user_id = $2
+     WHERE d.home_id = $1
+       AND (
+         h.user_id = $2
+         OR h.id IN (SELECT home_id FROM user_homes WHERE user_id = $2)
+       )
      ORDER BY d.upload_date DESC`,
     [homeId, userId]
   );
   return result.rows;
 };
 
-// Get all datasets across all homes of a user
+// ─── GET ALL datasets the user can access ─────────────────
+// Covers:
+//   (a) homes the user OWNS:   homes.user_id = userId
+//   (b) homes SHARED with user: user_homes table
 const findAllByUser = async (userId) => {
   const result = await pool.query(
-    `SELECT d.*, h.name AS home_name FROM datasets d
+    `SELECT d.*, h.name AS home_name
+     FROM datasets d
      JOIN homes h ON h.id = d.home_id
      WHERE h.user_id = $1
+        OR h.id IN (SELECT home_id FROM user_homes WHERE user_id = $1)
      ORDER BY d.upload_date DESC`,
     [userId]
   );
   return result.rows;
 };
 
+// ─── Find single dataset — owned or shared ────────────────
 const findById = async (id, userId) => {
   const result = await pool.query(
-    `SELECT d.* FROM datasets d
+    `SELECT d.*, h.name AS home_name
+     FROM datasets d
      JOIN homes h ON h.id = d.home_id
-     WHERE d.id = $1 AND h.user_id = $2`,
+     WHERE d.id = $1
+       AND (
+         h.user_id = $2
+         OR h.id IN (SELECT home_id FROM user_homes WHERE user_id = $2)
+       )`,
     [id, userId]
   );
   return result.rows[0] || null;
@@ -61,7 +77,9 @@ const updateDataset = async (id, duration, homeId, userId) => {
   const result = await pool.query(
     `UPDATE datasets d SET duration = $1, home_id = $2
      FROM homes h
-     WHERE d.id = $3 AND d.home_id = h.id AND h.user_id = $4
+     WHERE d.id = $3
+       AND d.home_id = h.id
+       AND (h.user_id = $4 OR h.id IN (SELECT home_id FROM user_homes WHERE user_id = $4))
      RETURNING d.*`,
     [duration || null, homeId, id, userId]
   );
@@ -72,7 +90,9 @@ const deleteDataset = async (id, userId) => {
   const result = await pool.query(
     `DELETE FROM datasets d
      USING homes h
-     WHERE d.home_id = h.id AND d.id = $1 AND h.user_id = $2
+     WHERE d.home_id = h.id
+       AND d.id = $1
+       AND (h.user_id = $2 OR h.id IN (SELECT home_id FROM user_homes WHERE user_id = $2))
      RETURNING d.*`,
     [id, userId]
   );

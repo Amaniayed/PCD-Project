@@ -19,6 +19,9 @@ except ImportError:
     except ImportError:
         sys.path.append(os.path.join(project_root, "src"))
         from models.autoencoder import Autoencoder
+# Split data into Train (70%), Validation (20%), and Test (10%)
+    # First split: Train and Remaining (30%)
+    # Second split: Validation (20/30 = 2/3) and Test (10/30 = 1/3)
 
 def train():
     processed_path = os.path.join(project_root, "data", "processed", "processed_full_year_dataset.csv")
@@ -35,12 +38,9 @@ def train():
 
 
     data_tensor = torch.tensor(data, dtype=torch.float32)
-
-    # Split data into Train (70%), Validation (20%), and Test (10%)
-    # First split: Train and Remaining (30%)
     train_data, temp_data = train_test_split(data_tensor, test_size=0.3, random_state=42)
-    # Second split: Validation (20/30 = 2/3) and Test (10/30 = 1/3)
     val_data, test_data = train_test_split(temp_data, test_size=1/3, random_state=42)
+    
     val_df = pd.DataFrame(val_data.numpy(), columns=consumption_cols)
     val_dir = os.path.join(project_root, "data", "validation")
     os.makedirs(val_dir, exist_ok=True)

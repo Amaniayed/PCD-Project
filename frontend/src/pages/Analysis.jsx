@@ -61,6 +61,7 @@ export default function Analysis() {
   const [loading,    setLoading]    = useState(false);
   const [fetching,   setFetching]   = useState(true);
   const [error,      setError]      = useState("");
+  const [fetchError, setFetchError] = useState("");
   const [search,     setSearch]     = useState("");
   const [typeFilter, setTypeFilter] = useState("All");
   const [page,       setPage]       = useState(1);
@@ -68,15 +69,39 @@ export default function Analysis() {
 
   useEffect(() => {
     const headers = authHeaders();
+    setFetching(true);
+    setFetchError("");
+
     Promise.all([
-      fetch(`${API}/homes`,    { headers }).then(r => r.json()),
-      fetch(`${API}/datasets`, { headers }).then(r => r.json()),
+      fetch(`${API}/homes`, { headers })
+        .then(r => r.ok ? r.json() : [])
+        .catch(() => []),
+      fetch(`${API}/datasets`, { headers })
+        .then(r => r.ok ? r.json() : [])
+        .catch(() => []),
     ])
-      .then(([h, d]) => {
-        setHomes(Array.isArray(h) ? h : []);
-        setDatasets(Array.isArray(d) ? d : []);
+      .then(([homesData, datasetsData]) => {
+        const homesList    = Array.isArray(homesData)    ? homesData    : [];
+        const datasetsList = Array.isArray(datasetsData) ? datasetsData : [];
+        setHomes(homesList);
+
+        // If datasets came back empty, try fetching per-home as fallback
+        if (datasetsList.length === 0 && homesList.length > 0) {
+          return Promise.all(
+            homesList.map(h =>
+              fetch(`${API}/datasets?home_id=${h.id}`, { headers })
+                .then(r => r.ok ? r.json() : [])
+                .catch(() => [])
+            )
+          ).then(results => {
+            const flat = results.flat().filter(Boolean);
+            setDatasets(flat);
+          });
+        } else {
+          setDatasets(datasetsList);
+        }
       })
-      .catch(() => setError("Failed to load. Make sure you are logged in."))
+      .catch(() => setFetchError("Failed to load monitoring files. Make sure you are logged in."))
       .finally(() => setFetching(false));
   }, []);
 
@@ -84,6 +109,14 @@ export default function Analysis() {
     homes.find(h => h.id === homeId)?.name || `Home #${homeId}`;
 
   const selectedDataset = datasets.find(d => d.id === Number(selectedId));
+
+  // Group datasets by home for display
+  const datasetsByHome = datasets.reduce((acc, d) => {
+    const key = d.home_id;
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(d);
+    return acc;
+  }, {});
 
   const handleAnalyze = async () => {
     if (!selectedId) return setError("Please select a monitoring file.");
@@ -113,7 +146,7 @@ export default function Analysis() {
 
   const filteredAnomalies = (result?.anomalies || []).filter(a => {
     const matchType   = typeFilter === "All" || a.anomaly_type === typeFilter;
-    const matchSearch = a.date.includes(search) ||
+    const matchSearch = (a.date || "").includes(search) ||
       ft(a.anomaly_type).label.toLowerCase().includes(search.toLowerCase());
     return matchType && matchSearch;
   });
@@ -127,7 +160,13 @@ export default function Analysis() {
   };
 
   if (fetching) {
-    return <div style={{ color: "#9aa0b4", fontSize: 14, paddingTop: 40 }}>Loading…</div>;
+    return (
+      <div style={{ color: "#9aa0b4", fontSize: 14, paddingTop: 40, display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ width: 18, height: 18, border: "2px solid #e8eaf0", borderTopColor: "#6366f1", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+        Loading monitoring files…
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
   }
 
   return (
@@ -155,23 +194,50 @@ export default function Analysis() {
             <span style={{ fontSize: 11, fontWeight: 600, color: "#9aa0b4", textTransform: "uppercase", letterSpacing: "0.5px", display: "block", marginBottom: 7 }}>
               Monitoring file *
             </span>
-            <select
-              value={selectedId}
-              onChange={e => { setSelectedId(e.target.value); setResult(null); setError(""); }}
-              style={{ background: "#f8f9fc", border: "1px solid #e8eaf0", borderRadius: 10, padding: "10px 13px", color: "#1e293b", fontSize: 14, outline: "none", fontFamily: "inherit", width: "100%" }}
-            >
-              <option value="">— Choose a monitoring file —</option>
-              {datasets.map(d => (
-                <option key={d.id} value={d.id}>
-                  🏠 {homeName(d.home_id)} — {d.duration || "?"} days
-                </option>
-              ))}
-            </select>
+
+            {datasets.length > 0 ? (
+              <select
+                value={selectedId}
+                onChange={e => { setSelectedId(e.target.value); setResult(null); setError(""); }}
+                style={{ background: "#f8f9fc", border: "1px solid #e8eaf0", borderRadius: 10, padding: "10px 13px", color: selectedId ? "#1e293b" : "#9aa0b4", fontSize: 14, outline: "none", fontFamily: "inherit", width: "100%" }}
+              >
+                <option value="">— Choose a monitoring file —</option>
+                {/* Grouped by home */}
+                {Object.entries(datasetsByHome).map(([homeId, dsets]) => (
+                  <optgroup key={homeId} label={`🏠 ${homeName(Number(homeId))}`}>
+                    {dsets.map(d => {
+                      const uploadDate = d.upload_date || d.created_at
+                        ? new Date(d.upload_date || d.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })
+                        : null;
+                      const days = d.duration || d.total_days || null;
+                      return (
+                        <option key={d.id} value={d.id}>
+                          {d.file_name || d.name || `Dataset #${d.id}`}
+                          {days ? ` — ${days} days` : ""}
+                          {uploadDate ? ` (${uploadDate})` : ""}
+                        </option>
+                      );
+                    })}
+                  </optgroup>
+                ))}
+              </select>
+            ) : (
+              <div style={{ padding: "10px 14px", background: "#f8f9fc", border: "1px solid #e8eaf0", borderRadius: 10, fontSize: 13, color: "#9aa0b4" }}>
+                {fetchError
+                  ? `⚠️ ${fetchError}`
+                  : homes.length === 0
+                    ? "No homes found. Please add a home in the Data page first."
+                    : "No monitoring files found for your homes. Please upload a file in the Data page."}
+              </div>
+            )}
           </div>
 
           {selectedDataset && (
-            <div style={{ fontSize: 12, color: "#9aa0b4", paddingBottom: 10 }}>
-              Uploaded {new Date(selectedDataset.upload_date || selectedDataset.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
+            <div style={{ fontSize: 12, color: "#9aa0b4", paddingBottom: 10, display: "flex", flexDirection: "column", gap: 3 }}>
+              <span>🏠 {homeName(selectedDataset.home_id)}</span>
+              {(selectedDataset.upload_date || selectedDataset.created_at) && (
+                <span>📅 Uploaded {new Date(selectedDataset.upload_date || selectedDataset.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</span>
+              )}
             </div>
           )}
 
@@ -204,44 +270,15 @@ export default function Analysis() {
             <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
           </div>
         )}
-
-        {!fetching && datasets.length === 0 && (
-          <div style={{ marginTop: 14, color: "#9aa0b4", fontSize: 13 }}>
-            No monitoring files found. Ask your administrator to upload a file for your resident's home.
-          </div>
-        )}
       </div>
 
       {/* ── Results ── */}
       {result && (
         <>
           {/* Overall verdict banner */}
-          <div style={{
-            background: severity.bg, border: `1px solid ${severity.border}`,
-            borderRadius: 16, padding: "20px 24px", marginBottom: 24,
-            display: "flex", alignItems: "center", gap: 16,
-          }}>
-            <div style={{ fontSize: 40 }}>{severity.icon}</div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 18, fontWeight: 700, color: severity.color, marginBottom: 4 }}>
-                {severity.label}
-              </div>
-              <div style={{ fontSize: 14, color: "#374151" }}>
-                {result.total_anomalies === 0
-                  ? "No unusual activity was detected. Everything looks normal."
-                  : `${result.total_anomalies} unusual day${result.total_anomalies > 1 ? "s" : ""} detected out of ${result.total_days} days monitored (${pct}%).`
-                }
-              </div>
-            </div>
-            {result.total_anomalies > 0 && (
-              <div style={{ textAlign: "right", flexShrink: 0 }}>
-                <div style={{ fontSize: 28, fontWeight: 800, color: severity.color }}>{pct}%</div>
-                <div style={{ fontSize: 11, color: "#9aa0b4", textTransform: "uppercase", letterSpacing: "0.4px" }}>unusual days</div>
-              </div>
-            )}
-          </div>
+          
 
-          {/* Summary stat cards — friendly labels only */}
+          {/* Summary stat cards */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12, marginBottom: 24 }}>
             {[
               { label: "Days monitored",  value: result.total_days,                                      color: "#6366f1", icon: "📅" },
@@ -256,7 +293,7 @@ export default function Analysis() {
             ))}
           </div>
 
-          {/* What was detected — friendly type breakdown */}
+          {/* What was detected — type breakdown */}
           {result.total_anomalies > 0 && (
             <div style={card}>
               <h2 style={{ fontSize: 15, fontWeight: 700, margin: "0 0 18px", color: "#374151" }}>
@@ -341,7 +378,7 @@ export default function Analysis() {
                             {(page - 1) * PAGE_SIZE + i + 1}
                           </td>
                           <td style={{ padding: "12px 16px", fontSize: 14, color: "#374151", fontWeight: 600 }}>
-                            {new Date(a.date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
+                            {a.date ? new Date(a.date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—"}
                           </td>
                           <td style={{ padding: "12px 16px" }}>
                             <span style={{ background: f.bg, color: f.color, border: `1px solid ${f.border}`, borderRadius: 20, padding: "3px 10px", fontSize: 12, fontWeight: 700, whiteSpace: "nowrap" }}>
